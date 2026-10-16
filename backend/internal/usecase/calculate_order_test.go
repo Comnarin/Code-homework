@@ -3,7 +3,6 @@ package usecase
 import (
 	"context"
 	"errors"
-	"math"
 	"testing"
 	"time"
 
@@ -156,7 +155,8 @@ func TestCalculateOrder_RejectsInvalidRequests(t *testing.T) {
 		{"negative quantity", items("blue", -3), domain.ErrInvalidQuantity},
 		{"quantity above the limit", items("blue", MaxQuantityPerLine+1), domain.ErrInvalidQuantity},
 		{"duplicates that add up above the limit", items("blue", 600, "blue", 600), domain.ErrInvalidQuantity},
-		{"quantities that would overflow when merged", items("blue", math.MaxInt, "blue", 2), domain.ErrInvalidQuantity},
+		// 4 x 2^62 wraps to 0, so the merged total would be a harmless-looking 5 without the per-item bound.
+		{"quantities that wrap around to a small total", items("blue", 1<<62, "blue", 1<<62, "blue", 1<<62, "blue", 1<<62, "blue", 5), domain.ErrInvalidQuantity},
 		{"unknown product", items("black", 1), domain.ErrUnknownProduct},
 	}
 	for _, tt := range tests {
