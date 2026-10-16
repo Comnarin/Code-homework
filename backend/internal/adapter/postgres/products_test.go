@@ -10,7 +10,7 @@ import (
 var _ usecase.ProductRepository = (*ProductRepository)(nil)
 
 func TestProductRepository_ListReturnsMenuInDisplayOrder(t *testing.T) {
-	repo := NewProductRepository(testPool(t))
+	repo := NewProductRepository(testDB(t))
 
 	got, err := repo.List(context.Background())
 	if err != nil {

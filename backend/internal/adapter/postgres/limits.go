@@ -5,30 +5,23 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
 
 	"github.com/comnarin/foodstore/internal/domain"
 )
 
-type LimitRepository struct{ pool *pgxpool.Pool }
+type LimitRepository struct{ db *gorm.DB }
 
-func NewLimitRepository(pool *pgxpool.Pool) *LimitRepository { return &LimitRepository{pool: pool} }
+func NewLimitRepository(db *gorm.DB) *LimitRepository { return &LimitRepository{db: db} }
 
 func (r *LimitRepository) ActiveLimits(ctx context.Context) (map[domain.ProductID]time.Duration, error) {
-	rows, err := r.pool.Query(ctx, "SELECT product_id, window_seconds FROM product_limits WHERE active")
-	if err != nil {
+	var rows []productLimitModel
+	if err := r.db.WithContext(ctx).Where("active").Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("query limits: %w", err)
 	}
-	defer rows.Close()
-
-	out := map[domain.ProductID]time.Duration{}
-	for rows.Next() {
-		var id string
-		var seconds int
-		if err := rows.Scan(&id, &seconds); err != nil {
-			return nil, fmt.Errorf("scan limit: %w", err)
-		}
-		out[domain.ProductID(id)] = time.Duration(seconds) * time.Second
+	out := make(map[domain.ProductID]time.Duration, len(rows))
+	for _, l := range rows {
+		out[domain.ProductID(l.ProductID)] = time.Duration(l.WindowSeconds) * time.Second
 	}
-	return out, rows.Err()
+	return out, nil
 }

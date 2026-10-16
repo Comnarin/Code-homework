@@ -10,7 +10,7 @@ import (
 var _ usecase.MemberRepository = (*MemberRepository)(nil)
 
 func TestMemberRepository_FindByCard(t *testing.T) {
-	repo := NewMemberRepository(testPool(t))
+	repo := NewMemberRepository(testDB(t))
 	ctx := context.Background()
 
 	m, found, err := repo.FindByCard(ctx, "MEM0001")
