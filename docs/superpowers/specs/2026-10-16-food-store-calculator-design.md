@@ -40,7 +40,7 @@ test-first. Runs with `docker compose up`.
 Rounding: each discount amount is rounded half-up to the nearest satang when computed.
 
 Known limits (documented in `docs/INTERVIEW.md`):
-- Clearing cookies gives a new anonymous identity, so the limit can be bypassed without accounts.
+- Clearing cookies gives a new anonymous identity. A new identity is rejected while the slot is held, so this does not bypass the limit; instead the current holder loses their own slot for the rest of the hour. Anonymous identity cannot prove who someone is, so real accounts are needed for that.
 - The slot is claimed at calculation time (as the spec implies), so a customer can hold it without buying. Production would claim at checkout.
 - Removing Red and recalculating does not release the slot until it expires.
 - A new promo of an existing type is an `INSERT`; a new type of promo needs a new Go rule implementation.

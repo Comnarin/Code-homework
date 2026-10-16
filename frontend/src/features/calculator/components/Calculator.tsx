@@ -24,44 +24,47 @@ export function Calculator({ products, calculate = calculateOrder }: Props) {
         void submit();
       }}
     >
-      <ul className="flex flex-col gap-3">
-        {products.map((p) => (
-          <ProductRow
-            key={p.id}
-            product={p}
-            quantity={state.quantities[p.id] ?? 0}
-            onIncrement={() => increment(p.id)}
-            onDecrement={() => decrement(p.id)}
+      {/* A disabled fieldset locks every control while a request is in flight, so the quote always matches what was sent. */}
+      <fieldset disabled={loading} className="flex min-w-0 flex-col gap-4 border-0 p-0">
+        <ul className="flex flex-col gap-3">
+          {products.map((p) => (
+            <ProductRow
+              key={p.id}
+              product={p}
+              quantity={state.quantities[p.id] ?? 0}
+              onIncrement={() => increment(p.id)}
+              onDecrement={() => decrement(p.id)}
+            />
+          ))}
+        </ul>
+
+        <div className="flex flex-col gap-1">
+          <label htmlFor="member-card" className="text-sm font-medium">
+            Card Number
+          </label>
+          <input
+            id="member-card"
+            value={state.memberCard}
+            onChange={(e) => setMemberCard(e.target.value)}
+            autoComplete="off"
+            className="rounded-full bg-white px-4 py-3 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600"
           />
-        ))}
-      </ul>
+        </div>
 
-      <div className="flex flex-col gap-1">
-        <label htmlFor="member-card" className="text-sm font-medium">
-          Card Number
-        </label>
-        <input
-          id="member-card"
-          value={state.memberCard}
-          onChange={(e) => setMemberCard(e.target.value)}
-          autoComplete="off"
-          className="rounded-full bg-white px-4 py-3 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600"
-        />
-      </div>
+        {state.errorMessage && (
+          <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">
+            {state.errorMessage}
+          </p>
+        )}
 
-      {state.errorMessage && (
-        <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">
-          {state.errorMessage}
-        </p>
-      )}
-
-      <button
-        type="submit"
-        disabled={!hasItems(state) || loading}
-        className="rounded-full bg-sky-500 py-3 text-white transition hover:bg-sky-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700 disabled:cursor-not-allowed disabled:bg-sky-200"
-      >
-        {loading ? "Calculating…" : "Calculate"}
-      </button>
+        <button
+          type="submit"
+          disabled={!hasItems(state) || loading}
+          className="rounded-full bg-sky-500 py-3 text-white transition hover:bg-sky-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700 disabled:cursor-not-allowed disabled:bg-sky-200"
+        >
+          {loading ? "Calculating…" : "Calculate"}
+        </button>
+      </fieldset>
     </form>
   );
 }

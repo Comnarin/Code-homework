@@ -22,7 +22,7 @@ docker compose up --build
 | API (direct) | http://localhost:18080 (container port 8080; 18080 avoids clashing with other local services) |
 | Postgres | `localhost:55432`, user `postgres`, password `pw`, database `foodstore` |
 
-Stop with `Ctrl+C`; remove the containers with `docker compose down`. Data is not persisted between runs.
+Stop with `Ctrl+C`. Postgres and Redis keep their data in Docker volumes, so orders and a held Red slot survive a plain stop and restart. For a clean start run `docker compose down -v`.
 
 ### Demo member cards
 
