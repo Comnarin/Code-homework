@@ -2,7 +2,6 @@
 package db
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,21 +9,39 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 
 	"github.com/comnarin/foodstore/migrations"
 )
 
-func NewPool(ctx context.Context, url string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, url)
+// NewGorm opens a GORM handle on Postgres and checks the connection.
+func NewGorm(url string) (*gorm.DB, error) {
+	gdb, err := gorm.Open(postgres.Open(url), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("connect postgres: %w", err)
 	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		return nil, fmt.Errorf("get sql db: %w", err)
+	}
+	if err := sqlDB.Ping(); err != nil {
+		_ = sqlDB.Close()
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
-	return pool, nil
+	return gdb, nil
+}
+
+// Close releases the connection pool behind gdb.
+func Close(gdb *gorm.DB) error {
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
 }
 
 // Migrate applies all pending migrations. It is safe to call on every start.

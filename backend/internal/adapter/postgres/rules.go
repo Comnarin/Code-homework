@@ -4,15 +4,17 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
 
 	"github.com/comnarin/foodstore/internal/domain"
 )
 
-type RuleRepository struct{ pool *pgxpool.Pool }
+type RuleRepository struct{ db *gorm.DB }
 
-func NewRuleRepository(pool *pgxpool.Pool) *RuleRepository { return &RuleRepository{pool: pool} }
+func NewRuleRepository(db *gorm.DB) *RuleRepository { return &RuleRepository{db: db} }
 
+// ruleRow is the shape buildRule needs; it is independent of GORM so the
+// mapping can be unit-tested without a database.
 type ruleRow struct {
 	code       string
 	typ        string
@@ -22,35 +24,32 @@ type ruleRow struct {
 	products   []string
 }
 
-const activeRulesSQL = `
-SELECT r.code, r.type, r.percent_bp, r.bundle_size, r.priority,
-       COALESCE(array_agg(rp.product_id) FILTER (WHERE rp.product_id IS NOT NULL), '{}')
-FROM rules r
-LEFT JOIN rule_products rp ON rp.rule_id = r.id
-WHERE r.active
-GROUP BY r.id
-ORDER BY r.priority, r.id`
-
 func (r *RuleRepository) ActiveRules(ctx context.Context) ([]domain.Rule, error) {
-	rows, err := r.pool.Query(ctx, activeRulesSQL)
-	if err != nil {
+	var rows []ruleModel
+	if err := r.db.WithContext(ctx).
+		Preload("Products").
+		Where("active").
+		Order("priority, id").
+		Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("query rules: %w", err)
 	}
-	defer rows.Close()
 
-	var out []domain.Rule
-	for rows.Next() {
-		var row ruleRow
-		if err := rows.Scan(&row.code, &row.typ, &row.percentBP, &row.bundleSize, &row.priority, &row.products); err != nil {
-			return nil, fmt.Errorf("scan rule: %w", err)
+	out := make([]domain.Rule, 0, len(rows))
+	for _, m := range rows {
+		products := make([]string, len(m.Products))
+		for i, p := range m.Products {
+			products[i] = p.ProductID
 		}
-		rule, err := buildRule(row)
+		rule, err := buildRule(ruleRow{
+			code: m.Code, typ: m.Type, percentBP: m.PercentBP,
+			bundleSize: m.BundleSize, priority: m.Priority, products: products,
+		})
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, rule)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // buildRule maps a table row to a domain rule. The domain knows nothing about tables.

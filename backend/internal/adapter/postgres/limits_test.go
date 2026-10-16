@@ -11,7 +11,7 @@ import (
 var _ usecase.LimitRepository = (*LimitRepository)(nil)
 
 func TestLimitRepository_ActiveLimitsReturnsRedForOneHour(t *testing.T) {
-	got, err := NewLimitRepository(testPool(t)).ActiveLimits(context.Background())
+	got, err := NewLimitRepository(testDB(t)).ActiveLimits(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

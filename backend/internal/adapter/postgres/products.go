@@ -1,38 +1,26 @@
-// Package postgres implements the use-case ports on Postgres via pgx.
 package postgres
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
 
 	"github.com/comnarin/foodstore/internal/domain"
 )
 
-type ProductRepository struct{ pool *pgxpool.Pool }
+type ProductRepository struct{ db *gorm.DB }
 
-func NewProductRepository(pool *pgxpool.Pool) *ProductRepository {
-	return &ProductRepository{pool: pool}
-}
+func NewProductRepository(db *gorm.DB) *ProductRepository { return &ProductRepository{db: db} }
 
 func (r *ProductRepository) List(ctx context.Context) ([]domain.Product, error) {
-	rows, err := r.pool.Query(ctx, "SELECT id, name, price_satang FROM products ORDER BY sort_order")
-	if err != nil {
+	var rows []productModel
+	if err := r.db.WithContext(ctx).Order("sort_order").Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("query products: %w", err)
 	}
-	defer rows.Close()
-
-	var out []domain.Product
-	for rows.Next() {
-		var p domain.Product
-		var id string
-		var price int64
-		if err := rows.Scan(&id, &p.Name, &price); err != nil {
-			return nil, fmt.Errorf("scan product: %w", err)
-		}
-		p.ID, p.Price = domain.ProductID(id), domain.Money(price)
-		out = append(out, p)
+	out := make([]domain.Product, len(rows))
+	for i, p := range rows {
+		out[i] = domain.Product{ID: domain.ProductID(p.ID), Name: p.Name, Price: domain.Money(p.PriceSatang)}
 	}
-	return out, rows.Err()
+	return out, nil
 }

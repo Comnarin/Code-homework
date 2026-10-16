@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/comnarin/foodstore/internal/domain"
 	"github.com/comnarin/foodstore/internal/usecase"
@@ -32,61 +33,95 @@ func sampleOrder(card string) domain.Order {
 	}
 }
 
+type savedOrderRow struct {
+	CustomerID           string
+	MemberCard           *string
+	TotalBeforeSatang    int
+	MemberDiscountSatang int
+	FinalTotalSatang     int
+}
+
+func loadOrder(t *testing.T, gdb *gorm.DB, id string) savedOrderRow {
+	t.Helper()
+	var row savedOrderRow
+	res := gdb.Raw(`SELECT customer_id, member_card, total_before_satang, member_discount_satang, final_total_satang
+		FROM orders WHERE id::text = ?`, id).Scan(&row)
+	if res.Error != nil || res.RowsAffected != 1 {
+		t.Fatalf("load order: rows=%d err=%v", res.RowsAffected, res.Error)
+	}
+	return row
+}
+
+func count(t *testing.T, gdb *gorm.DB, query string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := gdb.Raw(query, args...).Scan(&n).Error; err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 func TestOrderRepository_SaveStoresOrderItemsAndDiscounts(t *testing.T) {
-	pool := testPool(t)
-	ctx := context.Background()
+	gdb := testDB(t)
 	o := sampleOrder("MEM0001")
 
-	if err := NewOrderRepository(pool).Save(ctx, o); err != nil {
+	if err := NewOrderRepository(gdb).Save(context.Background(), o); err != nil {
 		t.Fatal(err)
 	}
 
-	var customer, card string
-	var before, member, final int
-	if err := pool.QueryRow(ctx,
-		`SELECT customer_id, member_card, total_before_satang, member_discount_satang, final_total_satang
-		 FROM orders WHERE id = $1::text::uuid`, o.ID).Scan(&customer, &card, &before, &member, &final); err != nil {
-		t.Fatal(err)
+	row := loadOrder(t, gdb, o.ID)
+	if row.CustomerID != "cust-1" || row.MemberCard == nil || *row.MemberCard != "MEM0001" ||
+		row.TotalBeforeSatang != 24000 || row.MemberDiscountSatang != 2280 || row.FinalTotalSatang != 20520 {
+		t.Fatalf("order row = %+v", row)
 	}
-	if customer != "cust-1" || card != "MEM0001" || before != 24000 || member != 2280 || final != 20520 {
-		t.Fatalf("order row = %s %s %d %d %d", customer, card, before, member, final)
+	if q := count(t, gdb, "SELECT quantity FROM order_items WHERE order_id::text = ? AND product_id = 'orange'", o.ID); q != 2 {
+		t.Fatalf("item qty = %d, want 2", q)
 	}
-
-	var qty int
-	if err := pool.QueryRow(ctx, "SELECT quantity FROM order_items WHERE order_id = $1::text::uuid AND product_id = 'orange'", o.ID).Scan(&qty); err != nil || qty != 2 {
-		t.Fatalf("item qty = %d err = %v", qty, err)
-	}
-	var discounts int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM order_discounts WHERE order_id = $1::text::uuid", o.ID).Scan(&discounts); err != nil || discounts != 2 {
-		t.Fatalf("discount rows = %d err = %v, want 2", discounts, err)
+	if n := count(t, gdb, "SELECT count(*) FROM order_discounts WHERE order_id::text = ?", o.ID); n != 2 {
+		t.Fatalf("discount rows = %d, want 2", n)
 	}
 }
 
 func TestOrderRepository_NonMemberOrderStoresNullCard(t *testing.T) {
-	pool := testPool(t)
-	ctx := context.Background()
+	gdb := testDB(t)
 	o := sampleOrder("")
 
-	if err := NewOrderRepository(pool).Save(ctx, o); err != nil {
+	if err := NewOrderRepository(gdb).Save(context.Background(), o); err != nil {
 		t.Fatal(err)
 	}
-	var isNull bool
-	if err := pool.QueryRow(ctx, "SELECT member_card IS NULL FROM orders WHERE id = $1::text::uuid", o.ID).Scan(&isNull); err != nil || !isNull {
-		t.Fatalf("member_card should be NULL: isNull=%v err=%v", isNull, err)
+	if row := loadOrder(t, gdb, o.ID); row.MemberCard != nil {
+		t.Fatalf("member_card should be NULL, got %q", *row.MemberCard)
+	}
+}
+
+func TestOrderRepository_StoresTheOrderTimestampWeGave(t *testing.T) {
+	gdb := testDB(t)
+	o := sampleOrder("")
+
+	if err := NewOrderRepository(gdb).Save(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	var got time.Time
+	if err := gdb.Raw("SELECT created_at FROM orders WHERE id::text = ?", o.ID).Scan(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(o.CreatedAt) {
+		t.Fatalf("created_at = %v, want %v (GORM must not overwrite it)", got, o.CreatedAt)
 	}
 }
 
 func TestOrderRepository_FailedSaveLeavesNoPartialRows(t *testing.T) {
-	pool := testPool(t)
-	ctx := context.Background()
+	gdb := testDB(t)
 	o := sampleOrder("MEM0001")
 	o.Lines[0].Product.ID = "no-such-product" // violates the order_items foreign key
 
-	if err := NewOrderRepository(pool).Save(ctx, o); err == nil {
+	if err := NewOrderRepository(gdb).Save(context.Background(), o); err == nil {
 		t.Fatal("want an error for an unknown product")
 	}
-	var n int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM orders").Scan(&n); err != nil || n != 0 {
-		t.Fatalf("orders = %d err = %v; the transaction must roll back", n, err)
+	if n := count(t, gdb, "SELECT count(*) FROM orders"); n != 0 {
+		t.Fatalf("orders = %d; the transaction must roll back", n)
+	}
+	if n := count(t, gdb, "SELECT count(*) FROM order_discounts"); n != 0 {
+		t.Fatalf("order_discounts = %d; the transaction must roll back", n)
 	}
 }

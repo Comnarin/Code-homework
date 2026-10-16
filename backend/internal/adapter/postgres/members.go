@@ -2,30 +2,26 @@ package postgres
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
 
 	"github.com/comnarin/foodstore/internal/domain"
 )
 
-type MemberRepository struct{ pool *pgxpool.Pool }
+type MemberRepository struct{ db *gorm.DB }
 
-func NewMemberRepository(pool *pgxpool.Pool) *MemberRepository { return &MemberRepository{pool: pool} }
+func NewMemberRepository(db *gorm.DB) *MemberRepository { return &MemberRepository{db: db} }
 
 func (r *MemberRepository) FindByCard(ctx context.Context, card string) (domain.Member, bool, error) {
-	var m domain.Member
-	var status string
-	err := r.pool.QueryRow(ctx, "SELECT card_number, full_name, status FROM members WHERE card_number = $1", card).
-		Scan(&m.CardNumber, &m.FullName, &status)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.Member{}, false, nil
-	}
-	if err != nil {
+	var rows []memberModel
+	// Find+Limit instead of First: a missing card is a normal outcome, not an error to log.
+	if err := r.db.WithContext(ctx).Where("card_number = ?", card).Limit(1).Find(&rows).Error; err != nil {
 		return domain.Member{}, false, fmt.Errorf("query member: %w", err)
 	}
-	m.Active = status == "ACTIVE"
-	return m, true, nil
+	if len(rows) == 0 {
+		return domain.Member{}, false, nil
+	}
+	m := rows[0]
+	return domain.Member{CardNumber: m.CardNumber, FullName: m.FullName, Active: m.Status == "ACTIVE"}, true, nil
 }

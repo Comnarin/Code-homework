@@ -12,7 +12,7 @@ import (
 var _ usecase.RuleRepository = (*RuleRepository)(nil)
 
 func TestRuleRepository_ActiveRulesMapsSeedRowsToDomainRules(t *testing.T) {
-	repo := NewRuleRepository(testPool(t))
+	repo := NewRuleRepository(testDB(t))
 
 	rules, err := repo.ActiveRules(context.Background())
 	if err != nil {
@@ -34,14 +34,14 @@ func TestRuleRepository_ActiveRulesMapsSeedRowsToDomainRules(t *testing.T) {
 }
 
 func TestRuleRepository_SkipsInactiveRules(t *testing.T) {
-	pool := testPool(t)
+	gdb := testDB(t)
 	ctx := context.Background()
-	if _, err := pool.Exec(ctx, "UPDATE rules SET active = false WHERE code = 'MEMBER_10'"); err != nil {
+	if err := gdb.Exec("UPDATE rules SET active = false WHERE code = 'MEMBER_10'").Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, "UPDATE rules SET active = true WHERE code = 'MEMBER_10'") })
+	t.Cleanup(func() { gdb.Exec("UPDATE rules SET active = true WHERE code = 'MEMBER_10'") })
 
-	rules, err := NewRuleRepository(pool).ActiveRules(ctx)
+	rules, err := NewRuleRepository(gdb).ActiveRules(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

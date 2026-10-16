@@ -1,21 +1,20 @@
 package postgres
 
 import (
-	"context"
 	"os"
 	"sync"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
 
 	"github.com/comnarin/foodstore/internal/platform/db"
 )
 
 var migrateOnce sync.Once
 
-// testPool returns a pool on a migrated database with no orders, or skips the
-// test when DATABASE_URL is not set.
-func testPool(t *testing.T) *pgxpool.Pool {
+// testDB returns a GORM handle on a migrated database with no orders, or skips
+// the test when DATABASE_URL is not set.
+func testDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
@@ -26,13 +25,13 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	if migrateErr != nil {
 		t.Fatalf("migrate: %v", migrateErr)
 	}
-	pool, err := db.NewPool(context.Background(), url)
+	gdb, err := db.NewGorm(url)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(context.Background(), "TRUNCATE orders CASCADE"); err != nil {
+	t.Cleanup(func() { _ = db.Close(gdb) })
+	if err := gdb.Exec("TRUNCATE orders CASCADE").Error; err != nil {
 		t.Fatal(err)
 	}
-	return pool
+	return gdb
 }
