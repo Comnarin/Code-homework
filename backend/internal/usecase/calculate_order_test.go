@@ -2,6 +2,8 @@ package usecase
 
 import (
 	"context"
+	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -140,5 +142,103 @@ func TestCalculateOrder_OnlyClaimsSlotsForLimitedProducts(t *testing.T) {
 	}
 	if len(f.limiter.claims) != 1 || f.limiter.claims[0] != "red" {
 		t.Fatalf("claims = %v, want only [red]", f.limiter.claims)
+	}
+}
+
+func TestCalculateOrder_RejectsInvalidRequests(t *testing.T) {
+	tests := []struct {
+		name  string
+		items []ItemInput
+		want  error
+	}{
+		{"empty order", nil, domain.ErrEmptyOrder},
+		{"zero quantity", items("blue", 0), domain.ErrInvalidQuantity},
+		{"negative quantity", items("blue", -3), domain.ErrInvalidQuantity},
+		{"quantity above the limit", items("blue", MaxQuantityPerLine+1), domain.ErrInvalidQuantity},
+		{"duplicates that add up above the limit", items("blue", 600, "blue", 600), domain.ErrInvalidQuantity},
+		{"quantities that would overflow when merged", items("blue", math.MaxInt, "blue", 2), domain.ErrInvalidQuantity},
+		{"unknown product", items("black", 1), domain.ErrUnknownProduct},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t)
+			_, err := f.uc.Execute(context.Background(), CalculateInput{CustomerID: "cust-1", Items: tt.items})
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("err = %v, want %v", err, tt.want)
+			}
+			if len(f.orders.saved) != 0 || len(f.limiter.claims) != 0 {
+				t.Fatal("an invalid request must not save an order or claim a slot")
+			}
+		})
+	}
+}
+
+func TestCalculateOrder_RejectsUnknownOrSuspendedCardWithoutClaimingRed(t *testing.T) {
+	for _, card := range []string{"NOPE", "MEM0002"} {
+		t.Run(card, func(t *testing.T) {
+			f := newFixture(t)
+			_, err := f.uc.Execute(context.Background(), CalculateInput{
+				CustomerID: "cust-1", MemberCard: card, Items: items("red", 1),
+			})
+			if !errors.Is(err, domain.ErrInvalidMemberCard) {
+				t.Fatalf("err = %v, want ErrInvalidMemberCard", err)
+			}
+			if len(f.limiter.claims) != 0 || len(f.orders.saved) != 0 {
+				t.Fatal("a rejected card must not claim the Red slot or save an order")
+			}
+		})
+	}
+}
+
+func TestCalculateOrder_DifferentCustomerCannotOrderRedWhileHeld(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, err := f.uc.Execute(ctx, CalculateInput{CustomerID: "cust-1", Items: items("red", 1)}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := f.uc.Execute(ctx, CalculateInput{CustomerID: "cust-2", MemberCard: "MEM0001", Items: items("red", 1)})
+
+	var held *domain.SlotHeldError
+	if !errors.As(err, &held) || held.ProductName != "Red set" || !errors.Is(err, domain.ErrSlotHeld) {
+		t.Fatalf("err = %v, want SlotHeldError for Red set", err)
+	}
+	if len(f.orders.saved) != 1 {
+		t.Fatalf("the rejected order must not be saved, saved = %d", len(f.orders.saved))
+	}
+}
+
+func TestCalculateOrder_LimiterOutageFailsTheRequestAndSavesNothing(t *testing.T) {
+	f := newFixture(t)
+	boom := errors.New("redis: connection refused")
+	f.limiter.err = boom
+
+	_, err := f.uc.Execute(context.Background(), CalculateInput{CustomerID: "cust-1", Items: items("red", 1)})
+
+	if !errors.Is(err, boom) || errors.Is(err, domain.ErrSlotHeld) {
+		t.Fatalf("err = %v, want the raw limiter error (not ErrSlotHeld)", err)
+	}
+	if len(f.orders.saved) != 0 {
+		t.Fatal("no order may be saved when the limiter fails")
+	}
+}
+
+func TestCalculateOrder_SaveFailureIsReturned(t *testing.T) {
+	f := newFixture(t)
+	boom := errors.New("db down")
+	f.orders.err = boom
+
+	if _, err := f.uc.Execute(context.Background(), CalculateInput{CustomerID: "cust-1", Items: items("blue", 1)}); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want %v", err, boom)
+	}
+}
+
+func TestCalculateOrder_ProductListFailureIsReturned(t *testing.T) {
+	f := newFixture(t)
+	boom := errors.New("db down")
+	f.products.err = boom
+
+	if _, err := f.uc.Execute(context.Background(), CalculateInput{CustomerID: "cust-1", Items: items("blue", 1)}); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want %v", err, boom)
 	}
 }
