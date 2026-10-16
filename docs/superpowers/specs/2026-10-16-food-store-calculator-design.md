@@ -261,6 +261,24 @@ Best practices applied:
 - Postgres integration: repositories, migrations and seed data tested against a real Postgres (skipped unless `DATABASE_URL` is set; run in Docker Compose).
 - Frontend: Vitest and React Testing Library for the hook, quantity controls and result rendering.
 
+### 10.1 TDD workflow (applies to every task in the plan)
+
+Red -> Green -> Refactor, one behavior at a time:
+1. **Red:** write one failing test for the next behavior; run it and watch it fail for the right reason.
+2. **Green:** write the minimum code to pass; run the whole package.
+3. **Refactor:** clean up with tests green; no behavior change.
+4. **Commit** after each green cycle (`test:` / `feat:` / `refactor:` messages), so history shows the test-first rhythm.
+
+Rules:
+- No production code without a failing test first. Bug fixes start with a test that reproduces the bug.
+- Build in vertical slices, inside-out: domain (`Money`, pricing rules) -> use cases with fakes -> adapters -> HTTP -> frontend. Each slice is test-first and ends working.
+- Test behavior through public APIs, not internals. Mock only at port boundaries (fakes for ports; never mock the domain).
+- Tests are table-driven in Go (`t.Run` subtests, `t.Parallel` where safe), named by behavior (`TestBundlePercent_ThreeGreen_DiscountsOnePair`). Frontend tests query by role and label, as a user would.
+- Determinism: inject `Clock` and `IDGenerator`; no `time.Now()` or random IDs inside use cases.
+- Concurrency: the Redis claim has a test with many goroutines claiming at once (exactly one owner wins); run `go test -race`.
+- Targets: domain and use cases ~100% line coverage; overall backend >= 85%; every PDF example and every error code has a test.
+- Commands (all documented in README): `go test -race -cover ./...`, `go vet ./...`, `npm test`, `npm run lint`, `npx tsc --noEmit`.
+
 ## 11. Delivery
 
 - `README.md`: prerequisites, `docker compose up`, ports, demo member cards, how to run tests (backend and frontend).
