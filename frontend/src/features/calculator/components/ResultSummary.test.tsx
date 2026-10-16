@@ -6,7 +6,15 @@ import { ResultSummary } from "./ResultSummary";
 
 const quote: Quote = {
   totalBeforeSatang: 24000,
-  itemDiscounts: [{ ruleCode: "PAIR_5", productId: "orange", name: "Orange set", bundles: 1, amountSatang: 1200 }],
+  itemDiscounts: [
+    {
+      ruleCode: "PAIR_5",
+      productId: "orange",
+      name: "Orange set",
+      bundles: 1,
+      amountSatang: 1200,
+    },
+  ],
   memberDiscountSatang: 2280,
   finalTotalSatang: 20520,
 };
@@ -15,16 +23,27 @@ describe("ResultSummary", () => {
   it("shows total, item discounts, member discount and final total", () => {
     render(<ResultSummary quote={quote} onRecalculate={vi.fn()} />);
 
-    expect(screen.getByText("Total (before discount)").parentElement).toHaveTextContent(/240\.00/);
+    expect(
+      screen.getByText("Total (before discount)").parentElement,
+    ).toHaveTextContent(/240\.00/);
     const items = screen.getByRole("region", { name: "Discounted items" });
     expect(within(items).getByText("Orange set")).toBeInTheDocument();
     expect(within(items).getByText(/-.*12\.00/)).toBeInTheDocument();
-    expect(screen.getByText("Discount from member card").parentElement).toHaveTextContent(/-.*22\.80/);
-    expect(screen.getByText("Final total").parentElement).toHaveTextContent(/205\.20/);
+    expect(
+      screen.getByText("Discount from member card").parentElement,
+    ).toHaveTextContent(/-.*22\.80/);
+    expect(screen.getByText("Final total").parentElement).toHaveTextContent(
+      /205\.20/,
+    );
   });
 
   it("says so when no item got a discount", () => {
-    render(<ResultSummary quote={{ ...quote, itemDiscounts: [], memberDiscountSatang: 0 }} onRecalculate={vi.fn()} />);
+    render(
+      <ResultSummary
+        quote={{ ...quote, itemDiscounts: [], memberDiscountSatang: 0 }}
+        onRecalculate={vi.fn()}
+      />,
+    );
     expect(screen.getByText(/no item discounts/i)).toBeInTheDocument();
   });
 
@@ -33,5 +52,26 @@ describe("ResultSummary", () => {
     render(<ResultSummary quote={quote} onRecalculate={onRecalculate} />);
     await userEvent.click(screen.getByRole("button", { name: "Recalculate" }));
     expect(onRecalculate).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells the customer how much they saved", () => {
+    render(<ResultSummary quote={quote} onRecalculate={vi.fn()} />);
+    // 240.00 before, 205.20 after
+    expect(screen.getByText(/you saved/i)).toHaveTextContent(/34\.80/);
+  });
+
+  it("does not mention savings when there was no discount", () => {
+    render(
+      <ResultSummary
+        quote={{
+          totalBeforeSatang: 6000,
+          itemDiscounts: [],
+          memberDiscountSatang: 0,
+          finalTotalSatang: 6000,
+        }}
+        onRecalculate={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/you saved/i)).not.toBeInTheDocument();
   });
 });

@@ -1,26 +1,38 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* Restrained palette: pure white, one warm-neutral ink, one deep accent.
+   The seven set colours live in features/calculator/swatches.ts and appear only as swatches. */
+@theme {
+  --color-ink: oklch(0.21 0.012 15);
+  --color-ink-soft: oklch(0.48 0.012 15); /* >= 5.5:1 on white */
+  --color-line: oklch(0.92 0.005 15);
+  --color-field: oklch(0.975 0.004 15);
+  --color-accent: oklch(0.45 0.14 15); /* focus rings and errors only */
+  --color-accent-soft: oklch(0.965 0.02 15);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* A bright-store, light-only UI: opting out of the OS dark scheme keeps contrast verified. */
+:root {
+  color-scheme: light;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: white;
+  color: var(--color-ink);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }

@@ -31,19 +31,33 @@ export const initialState: State = {
 export function calculatorReducer(state: State, action: Action): State {
   switch (action.type) {
     case "increment": {
-      const next = Math.min((state.quantities[action.productId] ?? 0) + 1, MAX_QUANTITY);
-      return { ...state, quantities: { ...state.quantities, [action.productId]: next } };
+      const next = Math.min(
+        (state.quantities[action.productId] ?? 0) + 1,
+        MAX_QUANTITY,
+      );
+      return {
+        ...state,
+        quantities: { ...state.quantities, [action.productId]: next },
+      };
     }
     case "decrement": {
       const next = Math.max((state.quantities[action.productId] ?? 0) - 1, 0);
-      return { ...state, quantities: { ...state.quantities, [action.productId]: next } };
+      return {
+        ...state,
+        quantities: { ...state.quantities, [action.productId]: next },
+      };
     }
     case "setMemberCard":
       return { ...state, memberCard: action.value };
     case "submit":
       return { ...state, status: "loading", errorMessage: null };
     case "succeeded":
-      return { ...state, status: "result", quote: action.quote, errorMessage: null };
+      return {
+        ...state,
+        status: "result",
+        quote: action.quote,
+        errorMessage: null,
+      };
     case "failed":
       return { ...state, status: "error", errorMessage: action.message };
     case "recalculate":
