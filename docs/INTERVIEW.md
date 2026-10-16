@@ -138,7 +138,7 @@ domain errors into `{status, code, message}`. Unexpected errors are logged and r
 |---|---|---|
 | Integer satang, basis points | No float rounding bugs; rounding is explicit and tested | Slightly less readable numbers |
 | Rules as DB rows + Go constructors | New promo of an existing type is an `INSERT`; the rule logic stays unit-testable and pure | A new *kind* of promo still needs Go code; rules are loaded per request (cheap, cacheable later) |
-| Atomic Lua claim, not `GET` then `SET` | Two concurrent requests cannot both see an empty slot | Needs Redis; if Redis restarts and loses the key, the slot frees early (use persistence/AOF if that matters) |
+| Atomic Lua claim, not `GET` then `SET` | Two concurrent requests cannot both see an empty slot | Needs Redis; the key can be lost if Redis crashes between snapshots or is flushed, so the slot frees early (use AOF if that matters) |
 | Slot holder may re-claim, TTL not extended | Recalculate must not lock the customer out of their own order | Holder keeps the slot even if they remove Red and recalculate |
 | Claim after validation | An invalid request cannot take the slot | If saving the order then fails, the slot stays held (documented limitation) |
 | Anonymous `cid` cookie | No accounts in scope; unguessable; JS cannot read it | Clearing cookies gives a new identity. Real fix: authentication |
@@ -204,9 +204,11 @@ that asserts exactly one wins, run with the race detector.
 without extending the TTL", which is a read-then-conditional-write. Doing that from Go would be two
 round trips with a race in between; the script makes it one atomic operation.
 
-**What if Redis restarts and loses the key?**
-The slot frees early and a second customer could order Red within the hour. For this app that is
-acceptable; if it matters I would enable AOF persistence, or keep the claim in Postgres with a
+**What if Redis loses the key?**
+With the default image, Redis writes periodic snapshots, so a clean restart usually keeps the slot,
+but a crash between snapshots or a flush drops it. Then the slot frees early and a second customer
+could order Red within the hour. For this app that is acceptable; if it matters I would enable AOF
+persistence, or keep the claim in Postgres with a
 unique constraint and an expiry timestamp.
 
 **Why integers for money? How do you round?**

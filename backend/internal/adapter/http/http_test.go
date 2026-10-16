@@ -262,3 +262,35 @@ func TestGetProducts_ListerFailureIs500(t *testing.T) {
 		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
 	}
 }
+
+func TestWrongMethodIsJSON405NotA500(t *testing.T) {
+	e := newEnv(t, &fakeCalculator{}, fakeLister{})
+
+	resp, body := e.do(t, "GET", "/api/calculate", "", "")
+
+	if resp.StatusCode != 405 || !strings.Contains(body, "METHOD_NOT_ALLOWED") {
+		t.Fatalf("status = %d body = %s, want 405 METHOD_NOT_ALLOWED", resp.StatusCode, body)
+	}
+}
+
+func TestMapError_KeepsFrameworkClientErrorStatuses(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{"not found", fiber.ErrNotFound, 404, "NOT_FOUND"},
+		{"method not allowed", fiber.ErrMethodNotAllowed, 405, "METHOD_NOT_ALLOWED"},
+		{"payload too large", fiber.ErrRequestEntityTooLarge, 413, "PAYLOAD_TOO_LARGE"},
+		{"other client error", fiber.ErrUnsupportedMediaType, 415, "BAD_REQUEST"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, detail := mapError(tt.err)
+			if status != tt.wantStatus || detail.Code != tt.wantCode {
+				t.Fatalf("mapError = %d %q, want %d %q", status, detail.Code, tt.wantStatus, tt.wantCode)
+			}
+		})
+	}
+}

@@ -92,4 +92,19 @@ describe("Calculator", () => {
     finish(okResult);
     expect(await screen.findByText("Final total")).toBeInTheDocument();
   });
+
+  it("locks the cart and card while a request is in flight so the result matches what was sent", async () => {
+    let finish: (r: CalculateResult) => void = () => {};
+    const calculate = vi.fn().mockReturnValue(new Promise<CalculateResult>((r) => (finish = r)));
+    render(<Calculator products={products} calculate={calculate} />);
+    await userEvent.click(screen.getByRole("button", { name: "Increase Pink set" }));
+    await userEvent.click(screen.getByRole("button", { name: "Calculate" }));
+
+    expect(screen.getByRole("button", { name: "Increase Pink set" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Decrease Pink set" })).toBeDisabled();
+    expect(screen.getByLabelText("Card Number")).toBeDisabled();
+
+    finish(okResult);
+    expect(await screen.findByText("Final total")).toBeInTheDocument();
+  });
 });

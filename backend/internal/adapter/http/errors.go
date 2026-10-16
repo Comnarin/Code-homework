@@ -47,9 +47,24 @@ func mapError(err error) (int, errorDetail) {
 		errors.Is(err, domain.ErrInvalidQuantity),
 		errors.Is(err, domain.ErrUnknownProduct):
 		return fiber.StatusBadRequest, errorDetail{Code: "INVALID_REQUEST", Message: err.Error()}
-	case errors.As(err, &fiberErr) && fiberErr.Code == fiber.StatusNotFound:
-		return fiber.StatusNotFound, errorDetail{Code: "NOT_FOUND", Message: "Route not found."}
+	case errors.As(err, &fiberErr) && fiberErr.Code >= 400 && fiberErr.Code < 500:
+		return fiberErr.Code, frameworkClientError(fiberErr)
 	default:
 		return fiber.StatusInternalServerError, errorDetail{Code: "INTERNAL", Message: "Something went wrong. Please try again."}
+	}
+}
+
+// frameworkClientError keeps the status Fiber chose for a client mistake (wrong
+// method, oversized body, ...) instead of reporting it as a server fault.
+func frameworkClientError(e *fiber.Error) errorDetail {
+	switch e.Code {
+	case fiber.StatusNotFound:
+		return errorDetail{Code: "NOT_FOUND", Message: "Route not found."}
+	case fiber.StatusMethodNotAllowed:
+		return errorDetail{Code: "METHOD_NOT_ALLOWED", Message: "Method not allowed for this route."}
+	case fiber.StatusRequestEntityTooLarge:
+		return errorDetail{Code: "PAYLOAD_TOO_LARGE", Message: "Request body is too large."}
+	default:
+		return errorDetail{Code: "BAD_REQUEST", Message: "The request could not be processed."}
 	}
 }
