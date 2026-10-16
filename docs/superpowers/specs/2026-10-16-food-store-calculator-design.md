@@ -148,10 +148,32 @@ order_items(order_id fk, product_id fk, quantity int not null check (quantity > 
 order_discounts(order_id fk, rule_code text not null, product_id text null, amount_satang int not null)
 ```
 
-Seed data:
-- 7 products; members `MEM0001` (ACTIVE) and `MEM0002` (SUSPENDED) for demos.
-- rules: `PAIR_5` (BUNDLE_PERCENT, 500, size 2, priority 10) with `rule_products` Orange, Pink, Green; `MEMBER_10` (MEMBER_PERCENT, 1000, priority 100).
-- product_limits: Red, 3600 seconds.
+Seed data (mirrors the PDF exactly):
+
+| products.id | name | price_satang |
+|---|---|---|
+| red | Red set | 5000 |
+| green | Green set | 4000 |
+| blue | Blue set | 3000 |
+| yellow | Yellow set | 5000 |
+| pink | Pink set | 8000 |
+| purple | Purple set | 9000 |
+| orange | Orange set | 12000 |
+
+| Table | Row | PDF condition |
+|---|---|---|
+| rules | `PAIR_5`: BUNDLE_PERCENT, percent_bp 500, bundle_size 2, priority 10 | "a pair of Orange, Pink or Green sets gets 5% discount for that pair" |
+| rule_products | (`PAIR_5`, orange), (`PAIR_5`, pink), (`PAIR_5`, green) | the three eligible colours |
+| rules | `MEMBER_10`: MEMBER_PERCENT, percent_bp 1000, priority 100 | "10% in total if customers have input member card numbers" |
+| product_limits | red, window_seconds 3600 | "Red sets ... only one customer within 1 hour" |
+
+Pair interpretation: a pair is two sets of the same colour (as in the PDF examples), not a mix such as Orange + Pink.
+Each PDF example is a pricing test case:
+- Orange x2 = (120 + 120) - 5% = 228.00
+- Pink x4 = (80 + 80) - 5% + (80 + 80) - 5% = 304.00
+- Green x3 = (40 + 40) - 5% + 40 = 116.00
+
+Demo members: `MEM0001` (ACTIVE) and `MEM0002` (SUSPENDED).
 
 An order, its items and its discounts are inserted in one transaction.
 Migrations run on API start, in Docker Compose.
