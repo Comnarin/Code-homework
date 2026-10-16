@@ -11,7 +11,12 @@ const products = [
 
 const okResult: CalculateResult = {
   ok: true,
-  quote: { totalBeforeSatang: 16000, itemDiscounts: [], memberDiscountSatang: 1600, finalTotalSatang: 14400 },
+  quote: {
+    totalBeforeSatang: 16000,
+    itemDiscounts: [],
+    memberDiscountSatang: 1600,
+    finalTotalSatang: 14400,
+  },
 };
 
 describe("Calculator", () => {
@@ -20,7 +25,9 @@ describe("Calculator", () => {
     const button = screen.getByRole("button", { name: "Calculate" });
     expect(button).toBeDisabled();
 
-    await userEvent.click(screen.getByRole("button", { name: "Increase Pink set" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Increase Pink set" }),
+    );
 
     expect(button).toBeEnabled();
   });
@@ -29,22 +36,40 @@ describe("Calculator", () => {
     const calculate = vi.fn().mockResolvedValue(okResult);
     render(<Calculator products={products} calculate={calculate} />);
 
-    await userEvent.click(screen.getByRole("button", { name: "Increase Pink set" }));
-    await userEvent.click(screen.getByRole("button", { name: "Increase Pink set" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Increase Pink set" }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Increase Pink set" }),
+    );
     await userEvent.type(screen.getByLabelText("Card Number"), "  MEM0001 ");
     await userEvent.click(screen.getByRole("button", { name: "Calculate" }));
 
-    expect(calculate).toHaveBeenCalledWith({ memberCard: "MEM0001", items: [{ productId: "pink", quantity: 2 }] });
+    expect(calculate).toHaveBeenCalledWith({
+      memberCard: "MEM0001",
+      items: [{ productId: "pink", quantity: 2 }],
+    });
     expect(await screen.findByText("Final total")).toBeInTheDocument();
-    expect(screen.getByText("Final total").parentElement).toHaveTextContent(/144\.00/);
+    expect(screen.getByText("Final total").parentElement).toHaveTextContent(
+      /144\.00/,
+    );
   });
 
   it("Recalculate goes back to the form with the cart intact", async () => {
-    render(<Calculator products={products} calculate={vi.fn().mockResolvedValue(okResult)} />);
-    await userEvent.click(screen.getByRole("button", { name: "Increase Pink set" }));
+    render(
+      <Calculator
+        products={products}
+        calculate={vi.fn().mockResolvedValue(okResult)}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Increase Pink set" }),
+    );
     await userEvent.click(screen.getByRole("button", { name: "Calculate" }));
 
-    await userEvent.click(await screen.findByRole("button", { name: "Recalculate" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Recalculate" }),
+    );
 
     expect(screen.getByLabelText("Pink set quantity")).toHaveTextContent("1");
   });
@@ -53,24 +78,35 @@ describe("Calculator", () => {
     const calculate = vi.fn().mockResolvedValue({
       ok: false,
       code: "LIMITED_PRODUCT_UNAVAILABLE",
-      message: "Red set is reserved by another customer right now. Please try again later.",
+      message:
+        "Red set is reserved by another customer right now. Please try again later.",
     });
     render(<Calculator products={products} calculate={calculate} />);
-    await userEvent.click(screen.getByRole("button", { name: "Increase Red set" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Increase Red set" }),
+    );
 
     await userEvent.click(screen.getByRole("button", { name: "Calculate" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Red set is reserved by another customer");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Red set is reserved by another customer",
+    );
     expect(screen.getByLabelText("Red set quantity")).toHaveTextContent("1");
   });
 
   it("shows a retryable message when the network fails and lets the user retry", async () => {
     const calculate = vi
       .fn()
-      .mockResolvedValueOnce({ ok: false, code: "NETWORK", message: "Cannot reach the server. Please try again." })
+      .mockResolvedValueOnce({
+        ok: false,
+        code: "NETWORK",
+        message: "Cannot reach the server. Please try again.",
+      })
       .mockResolvedValueOnce(okResult);
     render(<Calculator products={products} calculate={calculate} />);
-    await userEvent.click(screen.getByRole("button", { name: "Increase Pink set" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Increase Pink set" }),
+    );
 
     await userEvent.click(screen.getByRole("button", { name: "Calculate" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/try again/i);
@@ -81,9 +117,13 @@ describe("Calculator", () => {
 
   it("prevents double submission while a request is in flight", async () => {
     let finish: (r: CalculateResult) => void = () => {};
-    const calculate = vi.fn().mockReturnValue(new Promise<CalculateResult>((r) => (finish = r)));
+    const calculate = vi
+      .fn()
+      .mockReturnValue(new Promise<CalculateResult>((r) => (finish = r)));
     render(<Calculator products={products} calculate={calculate} />);
-    await userEvent.click(screen.getByRole("button", { name: "Increase Pink set" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Increase Pink set" }),
+    );
 
     await userEvent.click(screen.getByRole("button", { name: "Calculate" }));
 
@@ -95,13 +135,21 @@ describe("Calculator", () => {
 
   it("locks the cart and card while a request is in flight so the result matches what was sent", async () => {
     let finish: (r: CalculateResult) => void = () => {};
-    const calculate = vi.fn().mockReturnValue(new Promise<CalculateResult>((r) => (finish = r)));
+    const calculate = vi
+      .fn()
+      .mockReturnValue(new Promise<CalculateResult>((r) => (finish = r)));
     render(<Calculator products={products} calculate={calculate} />);
-    await userEvent.click(screen.getByRole("button", { name: "Increase Pink set" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Increase Pink set" }),
+    );
     await userEvent.click(screen.getByRole("button", { name: "Calculate" }));
 
-    expect(screen.getByRole("button", { name: "Increase Pink set" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Decrease Pink set" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Increase Pink set" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Decrease Pink set" }),
+    ).toBeDisabled();
     expect(screen.getByLabelText("Card Number")).toBeDisabled();
 
     finish(okResult);

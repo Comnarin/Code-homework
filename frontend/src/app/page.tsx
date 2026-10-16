@@ -5,8 +5,8 @@ import { getProducts } from "@/features/calculator/server";
 
 export default function Page() {
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-6 bg-slate-50 p-4 text-slate-900">
-      <h1 className="text-xl font-bold">Food Store Calculator</h1>
+    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-4 pt-10">
+      <h1 className="mb-2 text-3xl font-semibold tracking-tight">Food Store</h1>
       <Suspense fallback={<MenuSkeleton />}>
         <Menu />
       </Suspense>
@@ -24,9 +24,15 @@ async function Menu() {
 
 function MenuSkeleton() {
   return (
-    <div className="flex flex-col gap-3" aria-busy="true" aria-label="Loading menu">
+    <div aria-busy="true" aria-label="Loading menu">
       {Array.from({ length: 7 }, (_, i) => (
-        <div key={i} className="h-[72px] animate-pulse rounded-2xl bg-slate-200" />
+        <div
+          key={i}
+          className="flex h-[72px] items-center gap-3 border-b border-line last:border-b-0"
+        >
+          <div className="size-4 rounded-full bg-line motion-safe:animate-pulse" />
+          <div className="h-4 w-28 rounded bg-line motion-safe:animate-pulse" />
+        </div>
       ))}
     </div>
   );
