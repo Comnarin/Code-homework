@@ -40,7 +40,6 @@ func (h handlers) calculate(c fiber.Ctx) error {
 		return fmt.Errorf("%w: %v", errBadRequest, err)
 	}
 	in := usecase.CalculateInput{
-		CustomerID: customerID(c),
 		MemberCard: req.MemberCard,
 		Items:      make([]usecase.ItemInput, len(req.Items)),
 	}

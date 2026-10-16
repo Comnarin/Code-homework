@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/google/uuid"
 
 	"github.com/comnarin/foodstore/internal/domain"
 	"github.com/comnarin/foodstore/internal/usecase"
@@ -43,18 +42,15 @@ type env struct {
 func newEnv(t *testing.T, calc *fakeCalculator, lister fakeLister) env {
 	t.Helper()
 	return env{
-		app:  NewApp(Deps{Products: lister, Calculator: calc, NewID: uuid.NewString}),
+		app:  NewApp(Deps{Products: lister, Calculator: calc}),
 		calc: calc,
 	}
 }
 
-func (e env) do(t *testing.T, method, path, body, cookie string) (*http.Response, string) {
+func (e env) do(t *testing.T, method, path, body string) (*http.Response, string) {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	if cookie != "" {
-		req.Header.Set("Cookie", "cid="+cookie)
-	}
 	resp, err := e.app.Test(req)
 	if err != nil {
 		t.Fatal(err)
@@ -63,18 +59,9 @@ func (e env) do(t *testing.T, method, path, body, cookie string) (*http.Response
 	return resp, string(raw)
 }
 
-func cidFrom(resp *http.Response) string {
-	for _, c := range resp.Cookies() {
-		if c.Name == "cid" {
-			return c.Value
-		}
-	}
-	return ""
-}
-
 func TestHealthz(t *testing.T) {
 	e := newEnv(t, &fakeCalculator{}, fakeLister{})
-	resp, _ := e.do(t, "GET", "/healthz", "", "")
+	resp, _ := e.do(t, "GET", "/healthz", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
@@ -83,7 +70,7 @@ func TestHealthz(t *testing.T) {
 func TestGetProducts_ReturnsTheCatalogInSatang(t *testing.T) {
 	e := newEnv(t, &fakeCalculator{}, fakeLister{items: []domain.Product{{ID: "red", Name: "Red set", Price: 5000}}})
 
-	resp, body := e.do(t, "GET", "/api/products", "", "")
+	resp, body := e.do(t, "GET", "/api/products", "")
 
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
@@ -97,41 +84,7 @@ func TestGetProducts_ReturnsTheCatalogInSatang(t *testing.T) {
 	}
 }
 
-func TestCid_IssuedWhenMissingAndReusedWhenValid(t *testing.T) {
-	e := newEnv(t, &fakeCalculator{}, fakeLister{})
-
-	first, _ := e.do(t, "GET", "/api/products", "", "")
-	issued := cidFrom(first)
-	if _, err := uuid.Parse(issued); err != nil {
-		t.Fatalf("first response should set a UUID cid, got %q", issued)
-	}
-	var cookie *http.Cookie
-	for _, c := range first.Cookies() {
-		if c.Name == "cid" {
-			cookie = c
-		}
-	}
-	if !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode || cookie.Path != "/" {
-		t.Fatalf("cid cookie flags wrong: %+v", cookie)
-	}
-
-	second, _ := e.do(t, "GET", "/api/products", "", issued)
-	if cidFrom(second) != "" {
-		t.Fatal("a valid cid must be reused, not re-issued")
-	}
-}
-
-func TestCid_InvalidCookieIsReplaced(t *testing.T) {
-	e := newEnv(t, &fakeCalculator{}, fakeLister{})
-
-	resp, _ := e.do(t, "GET", "/api/products", "", "not-a-uuid")
-
-	if _, err := uuid.Parse(cidFrom(resp)); err != nil {
-		t.Fatalf("an invalid cid should be replaced with a fresh UUID, got %q", cidFrom(resp))
-	}
-}
-
-func TestPostCalculate_PassesTheCookieCustomerAndReturnsTheBreakdown(t *testing.T) {
+func TestPostCalculate_PassesTheOrderAndReturnsTheBreakdown(t *testing.T) {
 	calc := &fakeCalculator{quote: domain.Quote{
 		TotalBefore: 24000,
 		Discounts: []domain.Discount{
@@ -141,15 +94,14 @@ func TestPostCalculate_PassesTheCookieCustomerAndReturnsTheBreakdown(t *testing.
 		FinalTotal: 20520,
 	}}
 	e := newEnv(t, calc, fakeLister{})
-	cid := uuid.NewString()
 
 	resp, body := e.do(t, "POST", "/api/calculate",
-		`{"memberCard":"MEM0001","items":[{"productId":"orange","quantity":2}]}`, cid)
+		`{"memberCard":"MEM0001","items":[{"productId":"orange","quantity":2}]}`)
 
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
 	}
-	if calc.got.CustomerID != cid || calc.got.MemberCard != "MEM0001" ||
+	if calc.got.MemberCard != "MEM0001" ||
 		len(calc.got.Items) != 1 || calc.got.Items[0].ProductID != "orange" || calc.got.Items[0].Quantity != 2 {
 		t.Fatalf("use case input = %+v", calc.got)
 	}
@@ -177,7 +129,7 @@ func TestPostCalculate_PassesTheCookieCustomerAndReturnsTheBreakdown(t *testing.
 func TestPostCalculate_NoDiscountsSerializesAsEmptyArrayNotNull(t *testing.T) {
 	e := newEnv(t, &fakeCalculator{quote: domain.Quote{TotalBefore: 3000, FinalTotal: 3000}}, fakeLister{})
 
-	_, body := e.do(t, "POST", "/api/calculate", `{"items":[{"productId":"blue","quantity":1}]}`, "")
+	_, body := e.do(t, "POST", "/api/calculate", `{"items":[{"productId":"blue","quantity":1}]}`)
 
 	if !strings.Contains(body, `"itemDiscounts":[]`) {
 		t.Fatalf("itemDiscounts must be [] not null: %s", body)
@@ -203,7 +155,7 @@ func TestErrors_MapToStatusAndCode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newEnv(t, &fakeCalculator{err: tt.err}, fakeLister{})
 
-			resp, body := e.do(t, "POST", "/api/calculate", `{"items":[{"productId":"red","quantity":1}]}`, "")
+			resp, body := e.do(t, "POST", "/api/calculate", `{"items":[{"productId":"red","quantity":1}]}`)
 
 			if resp.StatusCode != tt.wantStatus {
 				t.Fatalf("status = %d, want %d (%s)", resp.StatusCode, tt.wantStatus, body)
@@ -234,7 +186,7 @@ func TestPostCalculate_MalformedOrEmptyBodyIs400(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			e := newEnv(t, &fakeCalculator{}, fakeLister{})
 
-			resp, out := e.do(t, "POST", "/api/calculate", body, "")
+			resp, out := e.do(t, "POST", "/api/calculate", body)
 
 			if resp.StatusCode != 400 || !strings.Contains(out, "INVALID_REQUEST") {
 				t.Fatalf("status = %d body = %s, want 400 INVALID_REQUEST", resp.StatusCode, out)
@@ -246,7 +198,7 @@ func TestPostCalculate_MalformedOrEmptyBodyIs400(t *testing.T) {
 func TestUnknownRouteIsJSON404(t *testing.T) {
 	e := newEnv(t, &fakeCalculator{}, fakeLister{})
 
-	resp, body := e.do(t, "GET", "/api/nope", "", "")
+	resp, body := e.do(t, "GET", "/api/nope", "")
 
 	if resp.StatusCode != 404 || !strings.Contains(body, "NOT_FOUND") {
 		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
@@ -256,7 +208,7 @@ func TestUnknownRouteIsJSON404(t *testing.T) {
 func TestGetProducts_ListerFailureIs500(t *testing.T) {
 	e := newEnv(t, &fakeCalculator{}, fakeLister{err: errors.New("db down")})
 
-	resp, body := e.do(t, "GET", "/api/products", "", "")
+	resp, body := e.do(t, "GET", "/api/products", "")
 
 	if resp.StatusCode != 500 || strings.Contains(body, "db down") {
 		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
@@ -266,7 +218,7 @@ func TestGetProducts_ListerFailureIs500(t *testing.T) {
 func TestWrongMethodIsJSON405NotA500(t *testing.T) {
 	e := newEnv(t, &fakeCalculator{}, fakeLister{})
 
-	resp, body := e.do(t, "GET", "/api/calculate", "", "")
+	resp, body := e.do(t, "GET", "/api/calculate", "")
 
 	if resp.StatusCode != 405 || !strings.Contains(body, "METHOD_NOT_ALLOWED") {
 		t.Fatalf("status = %d body = %s, want 405 METHOD_NOT_ALLOWED", resp.StatusCode, body)
@@ -292,5 +244,15 @@ func TestMapError_KeepsFrameworkClientErrorStatuses(t *testing.T) {
 				t.Fatalf("mapError = %d %q, want %d %q", status, detail.Code, tt.wantStatus, tt.wantCode)
 			}
 		})
+	}
+}
+
+func TestNoCustomerCookieIsIssued(t *testing.T) {
+	e := newEnv(t, &fakeCalculator{}, fakeLister{})
+
+	resp, _ := e.do(t, "GET", "/api/products", "")
+
+	if got := resp.Header.Get("Set-Cookie"); got != "" {
+		t.Fatalf("the API identifies no customers, but set a cookie: %q", got)
 	}
 }

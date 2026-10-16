@@ -6,8 +6,8 @@ const apiUrl = process.env.API_URL ?? "http://localhost:8080";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  // The browser calls /api/* on this origin; the Go API receives it, so the
-  // HttpOnly `cid` cookie travels without any CORS setup.
+  // The browser calls /api/* on this origin and Next forwards it to the Go API,
+  // so there is no CORS setup.
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${apiUrl}/api/:path*` }];
   },

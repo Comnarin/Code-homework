@@ -47,25 +47,25 @@ func (f *fakeOrders) Save(_ context.Context, o domain.Order) error {
 	return nil
 }
 
-// fakeLimiter mimics the Redis semantics: free slot -> claim; same owner -> ok;
-// other owner -> ErrSlotHeld.
+// fakeLimiter mimics the Redis semantics: the first claim of a product wins,
+// any later claim in the window gets ErrSlotHeld, whoever asks.
 type fakeLimiter struct {
-	holders map[domain.ProductID]string
-	claims  []domain.ProductID
-	err     error
+	held   map[domain.ProductID]bool
+	claims []domain.ProductID
+	err    error
 }
 
-func (f *fakeLimiter) Claim(_ context.Context, p domain.ProductID, owner string, _ time.Duration) error {
+func (f *fakeLimiter) Claim(_ context.Context, p domain.ProductID, _ time.Duration) error {
 	if f.err != nil {
 		return f.err
 	}
-	if holder, ok := f.holders[p]; ok && holder != owner {
+	if f.held[p] {
 		return domain.ErrSlotHeld
 	}
-	if f.holders == nil {
-		f.holders = map[domain.ProductID]string{}
+	if f.held == nil {
+		f.held = map[domain.ProductID]bool{}
 	}
-	f.holders[p] = owner
+	f.held[p] = true
 	f.claims = append(f.claims, p)
 	return nil
 }

@@ -54,7 +54,6 @@ func (productLimitModel) TableName() string { return "product_limits" }
 
 type orderModel struct {
 	ID                   string               `gorm:"column:id;primaryKey"`
-	CustomerID           string               `gorm:"column:customer_id"`
 	MemberCard           *string              `gorm:"column:member_card"`
 	TotalBeforeSatang    int64                `gorm:"column:total_before_satang"`
 	MemberDiscountSatang int64                `gorm:"column:member_discount_satang"`

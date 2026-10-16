@@ -1,5 +1,7 @@
 # Food Store Calculator: Design Spec
 
+> **Revision (2026-10-16, after implementation review):** the Red-set rule was simplified to its literal reading: if a Red set was ordered in the last hour, no further Red order is accepted, from anyone. Customer identity (the `cid` cookie, the `customer_id` column, and the "holder may re-order" behavior) was removed. Sections below describe the current design.
+
 Date: 2026-10-16
 Source: `Code Homework Test.pdf` (scored on readability, maintainability, extensibility, logic)
 
@@ -28,9 +30,9 @@ test-first. Runs with `docker compose up`.
 |---|----------|-----|
 | D1 | Member 10% applies after pair discounts | "10% in total"; the PDF mockup shows it as a separate line after item discounts |
 | D2 | Member cards are validated against a `members` table. An unknown or non-ACTIVE card rejects the request with 400 `INVALID_MEMBER_CARD` | The customer entered a card expecting a discount; silently ignoring it would mislead |
-| D3 | Red limit is one global slot per limited product, held for its window (3600 s for Red), stored in Redis | Spec says "only one customer ... within 1 hour" |
-| D4 | The slot holder may recalculate or reorder during the window; the timer does not restart | Otherwise the Recalculate button would block the customer who holds the slot |
-| D5 | Customer identity is a server-issued anonymous cookie `cid`. The member card does not affect identity | Not forgeable by guessing; a typed card number could be used to take over someone's slot |
+| D3 | Red limit is one global window per limited product (3600 s for Red), stored in Redis | Spec says "only one customer ... within 1 hour": read as "if Red was ordered in the last hour, reject further Red orders" |
+| D4 | No customer identity is tracked. After the first accepted Red order, every Red order is rejected for the window, including from the same person (for example pressing Recalculate with Red in the cart) | Simplest faithful reading; needs no accounts or cookies |
+| D5 | Orders store no customer ID | The rule does not depend on who the customer is |
 | D6 | Money is integer satang (1/100 THB) | Avoids float errors; rounding is explicit |
 | D7 | Products, discount rules and product limits live in Postgres, seeded by migration | Prices and conditions out of code; extensibility |
 | D8 | Each successful calculation is saved as an order with the rules that fired | Audit trail |
@@ -40,9 +42,9 @@ test-first. Runs with `docker compose up`.
 Rounding: each discount amount is rounded half-up to the nearest satang when computed.
 
 Known limits (documented in `docs/INTERVIEW.md`):
-- Clearing cookies gives a new anonymous identity. A new identity is rejected while the slot is held, so this does not bypass the limit; instead the current holder loses their own slot for the rest of the hour. Anonymous identity cannot prove who someone is, so real accounts are needed for that.
-- The slot is claimed at calculation time (as the spec implies), so a customer can hold it without buying. Production would claim at checkout.
-- Removing Red and recalculating does not release the slot until it expires.
+- Without identity, the person who ordered Red is also blocked if they recalculate with Red in the cart within the hour.
+- The slot is claimed at calculation time (as the spec implies), so a price check by anyone blocks Red for an hour. Production would claim at checkout.
+- Nothing releases the window early; it only expires.
 - A new promo of an existing type is an `INSERT`; a new type of promo needs a new Go rule implementation.
 
 ## 4. Architecture
@@ -67,7 +69,7 @@ Code-homework/
         calculate_order.go       CalculateOrder interactor (+ input/output models)
         list_products.go         ListProducts interactor
       adapter/                   LAYER 3: interface adapters (translate to/from the outside)
-        http/                    Fiber handlers, request/response DTOs, cid middleware,
+        http/                    Fiber handlers, request/response DTOs,
                                  error-to-status mapper, router
         postgres/                repositories implementing the ports; row -> domain.Rule mapping
         redis/                   SlotLimiter implementation (Lua script)
@@ -116,14 +118,14 @@ knows nothing about tables.
 ```go
 // declared in usecase/ports.go, implemented in adapter/redis
 type SlotLimiter interface {
-    // Claim reserves the slot for productID for ownerID for ttl. It succeeds if
-    // the slot is free or already held by ownerID; otherwise it returns domain.ErrSlotHeld.
-    Claim(ctx context.Context, productID, ownerID string, ttl time.Duration) error
+    // Claim records that productID was just ordered and blocks further orders of it
+    // for ttl. If it was already ordered within the window, it returns domain.ErrSlotHeld.
+    Claim(ctx context.Context, productID domain.ProductID, ttl time.Duration) error
 }
 ```
 
-- Redis key `limit:{productID}:holder`, value = `cid`, TTL = `product_limits.window_seconds`.
-- Claim is one Lua script (atomic): if no key, `SET ... EX`; if value equals owner, succeed without extending the TTL; else return held.
+- Redis key `limit:{productID}:ordered`, TTL = `product_limits.window_seconds`.
+- Claim is one `SET key value NX PX ttl` command (atomic): the first caller creates the key and wins; every other caller in the window is rejected and the window is not extended.
 - The service claims a slot for each ordered product that has an active row in `product_limits`.
   Orders with several limited products claim in product ID order; if a later claim fails, earlier claims of this request are kept (documented limitation; none exist in seed data beyond Red).
 - Tests: miniredis for the Redis implementation; a trivial fake for service tests.
@@ -133,13 +135,12 @@ type SlotLimiter interface {
 All under `/api`. Errors share one shape: `{ "error": { "code", "message" } }`.
 
 - `GET /api/products` returns `[{id, name, priceSatang}]`.
-- `POST /api/calculate` takes `{memberCard?, items:[{productId, quantity}]}`. The customer comes from the `cid` cookie.
+- `POST /api/calculate` takes `{memberCard?, items:[{productId, quantity}]}`.
   - 200 returns `{totalBeforeSatang, itemDiscounts[{ruleCode, productId, name, bundles, amountSatang}], memberDiscountSatang, finalTotalSatang}`.
   - 400 `INVALID_REQUEST`: unknown product, quantity not a positive integer, empty order.
   - 400 `INVALID_MEMBER_CARD`: card not found or not ACTIVE. Card is normalized (trimmed, uppercased) before lookup.
-  - 409 `LIMITED_PRODUCT_UNAVAILABLE` (message names the product): another customer holds the slot.
+  - 409 `LIMITED_PRODUCT_UNAVAILABLE` (message names the product): the product was already ordered within its window.
 - `GET /healthz` returns 200 (used by Docker healthchecks).
-- `cid` middleware: if the cookie is missing, generate a random UUID and set `cid` as `HttpOnly; SameSite=Lax; Path=/`; put it in the request context.
 
 Order of operations in the `CalculateOrder` use case: validate items -> look up member (if card given) -> load active rules and limits -> price (pure) -> claim limited slots (409 on conflict) -> persist order -> respond.
 Slots are claimed only after all validation passes, so an invalid request cannot take one.
@@ -166,7 +167,7 @@ rule_products(rule_id int fk, product_id text fk, primary key (rule_id, product_
 product_limits(product_id text pk fk, window_seconds int not null check (window_seconds > 0),
                active boolean not null default true)
 
-orders(id uuid pk, customer_id text not null,
+orders(id uuid pk,
        member_card text null references members(card_number),
        total_before int, member_discount int, final_total int,
        created_at timestamptz not null default now())
@@ -221,10 +222,8 @@ Best practices applied:
   passes it to one Client Component island, `Calculator`. Only the interactive part
   ships JavaScript. Products are cached with `fetch(..., { next: { revalidate: 60 } })`.
 - **Browser calls go through a rewrite.** `next.config.ts` rewrites `/api/*` to the Go
-  API, so the browser uses one origin and the `cid` cookie needs no CORS credential setup.
-  `calculate` is called from the client (not a Server Action) because the cookie must
-  travel with the browser's request; forwarding it through a Server Action adds
-  complexity and no benefit here.
+  API, so the browser uses one origin and needs no CORS setup. `calculate` is called from
+  the client; a Server Action would add a hop and no benefit here.
 - **Validate at the boundary.** Zod schemas parse every API response, so types are
   derived from runtime-checked data (`z.infer`) and not asserted with `as`.
 - **Feature-based structure, logic out of components:**
@@ -240,8 +239,8 @@ Best practices applied:
   ```
 - **State:** `useReducer` inside `useCalculator`; no global store (YAGNI). Quantities are
   never negative; the stepper disables "-" at 0. Calculate is disabled with an empty cart.
-- **Errors as UI states:** 409 shows the API message "<Product> is reserved by another
-  customer right now. Please try again later." (the window is data, so the text does not
+- **Errors as UI states:** 409 shows the API message "<Product> was ordered recently
+  and is not available right now. Please try again later." (the window is data, so the text does not
   name a duration); `INVALID_MEMBER_CARD` shows "Member card not found." Errors render
   in a `role="alert"` region.
 - **Accessibility:** real `<button>` and `<label>` elements, `aria-label` on steppers
@@ -257,8 +256,8 @@ Best practices applied:
 - `domain`: table-driven tests for the PDF examples, the member discount, rounding, mixed orders, the empty order, and rule constructor validation. No mocks needed.
 - `usecase`: `CalculateOrder` and `ListProducts` tested with in-memory fakes of every port.
 - `adapter/postgres`: rule row mapping, including unknown type error (integration, below).
-- `adapter/redis`: miniredis tests for same owner, different owner, expiry, and per-product keys.
-- `adapter/http`: Fiber `app.Test` with a fake use case for status codes, error shapes and `cid` cookie behavior. End-to-end scenarios (use case + fakes) include: same customer orders Red twice in one hour, second with a valid member card (allowed, member discount applied); a different `cid` is rejected with 409; an unknown member card returns 400 and does not claim a slot.
+- `adapter/redis`: miniredis tests for first claim, second claim rejected, expiry, and per-product keys.
+- `adapter/http`: Fiber `app.Test` with a fake use case for status codes, error shapes and "no cookie issued". Use-case scenarios (with fakes) include: a second Red order within the hour is rejected for anyone, even with a valid member card; orders without Red still work while Red is blocked; an unknown member card returns 400 and does not claim the window.
 - Postgres integration: repositories, migrations and seed data tested against a real Postgres (skipped unless `DATABASE_URL` is set; run in Docker Compose).
 - Frontend: Vitest and React Testing Library for the hook, quantity controls and result rendering.
 
@@ -276,7 +275,7 @@ Rules:
 - Test behavior through public APIs, not internals. Mock only at port boundaries (fakes for ports; never mock the domain).
 - Tests are table-driven in Go (`t.Run` subtests, `t.Parallel` where safe), named by behavior (`TestBundlePercent_ThreeGreen_DiscountsOnePair`). Frontend tests query by role and label, as a user would.
 - Determinism: inject `Clock` and `IDGenerator`; no `time.Now()` or random IDs inside use cases.
-- Concurrency: the Redis claim has a test with many goroutines claiming at once (exactly one owner wins); run `go test -race`.
+- Concurrency: the Redis claim has a test with many goroutines claiming at once (exactly one claim wins); run `go test -race`.
 - Targets: domain and use cases ~100% line coverage; overall backend >= 85%; every PDF example and every error code has a test.
 - Commands (all documented in README): `go test -race -cover ./...`, `go vet ./...`, `npm test`, `npm run lint`, `npx tsc --noEmit`.
 

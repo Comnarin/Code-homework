@@ -9,16 +9,16 @@ exists in the repo; every code excerpt is copied from it.
 > Clean Architecture: the pricing rules are a pure domain function with no I/O, the use cases talk
 > to Postgres (through GORM) and Redis only through interfaces, and Fiber is just a thin delivery
 > layer. Discounts and the "one customer per hour" limit on the Red set live in database tables, so
-> a new promotion is a row, not a deploy. The Red-set lock is an atomic Redis Lua script, so two
-> simultaneous customers can never both win. I wrote it test-first: 100% coverage on the HTTP and
-> Redis adapters, 97% on the domain, 95% on the use cases, plus 37 frontend tests, and the whole
+> a new promotion is a row, not a deploy. The Red-set rule is one atomic Redis command (`SET NX` with a
+> one-hour expiry), so two simultaneous orders can never both win. I wrote it test-first: 100% coverage on the HTTP and
+> Redis adapters, 97% on the domain, 95% on the use cases, plus 43 frontend tests, and the whole
 > thing starts with `docker compose up`.
 
 ## 2. What the project does
 
 - 7 products. **Pair discount:** each pair of the *same* colour among Orange, Pink, Green gets 5% off that pair.
   **Member discount:** 10% off the total (after pair discounts) for a valid member card.
-  **Red set:** only one customer may order it per hour.
+  **Red set:** if a Red set was ordered in the last hour, nobody can order Red again until the hour is over.
 - Endpoints: `GET /api/products`, `POST /api/calculate`, `GET /healthz`.
 - UI: product list with +/-, card input, Calculate; result screen with total, item discounts, member discount, final total.
 
@@ -31,7 +31,6 @@ Browser ──POST /api/calculate──▶ Next.js (:3000)
                                    │ rewrite /api/* (next.config.ts)
                                    ▼
                               Go API (:8080)
-  adapter/http/cid.go            cidMiddleware: read or issue the `cid` cookie → customer ID
   adapter/http/handlers.go       calculate(): parse JSON → usecase.CalculateInput
   usecase/calculate_order.go     Execute():
         1. mergeItems       validate quantities, merge duplicate products
@@ -39,7 +38,7 @@ Browser ──POST /api/calculate──▶ Next.js (:3000)
         3. checkMember      normalize card, must exist and be ACTIVE      ──▶ Postgres (members)
         4. ActiveRules      build domain rules from table rows            ──▶ Postgres (rules)
         5. domain.Calculate pure pricing → Quote
-        6. claimLimited     claim Red slot if ordered                     ──▶ Redis (Lua)
+        6. claimLimited     record Red as ordered (SET NX)                ──▶ Redis
         7. Orders.Save      order + items + discounts, one transaction    ──▶ Postgres
   adapter/http/dto.go            Quote → JSON (amounts in satang)
 Browser ◀── ResultSummary ◀──────────────────────────────────────────────
@@ -96,26 +95,16 @@ type Rule interface {
 `product_limits`. `adapter/postgres/rules.go` turns a row into a domain rule with `buildRule`; an
 unknown rule type fails loudly instead of being ignored.
 
-**The Red lock** (`adapter/redis/slot_limiter.go`) is one Lua script, so check-and-set is atomic:
+**The Red rule** (`adapter/redis/slot_limiter.go`) is a single Redis command, which Redis executes atomically:
 
-```lua
-local holder = redis.call('GET', KEYS[1])
-if not holder then
-  redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
-  return 1
-end
-if holder == ARGV[1] then
-  return 1
-end
-return 0
+```go
+won, err := l.client.SetNX(ctx, slotKey(productID), "1", ttl).Result()
 ```
 
-Free → claim with a 1-hour TTL. Same owner → allowed, TTL **not** extended (so the Recalculate button
-works but a customer cannot hold the slot forever). Different owner → `ErrSlotHeld` → HTTP 409.
-
-**Customer identity** (`adapter/http/cid.go`): the API issues a random UUID in an HttpOnly cookie
-`cid`. The frontend never sees or sends it; the browser attaches it. The Next.js rewrite keeps the
-browser on one origin, so no CORS setup is needed.
+`SET key value NX PX ttl` creates the key only if it does not exist, and gives it a one-hour expiry.
+The first order of Red creates it and wins; every other Red order until it expires gets
+`ErrSlotHeld` → HTTP 409. A rejected claim does **not** extend the window. There is no customer
+identity: the rule is "was Red ordered in the last hour?", the same answer for everyone.
 
 **Errors have one exit** (`adapter/http/errors.go`): handlers just `return err`; `mapError` turns
 domain errors into `{status, code, message}`. Unexpected errors are logged and returned as a generic
@@ -129,8 +118,8 @@ domain errors into `{status, code, message}`. Unexpected errors are logged and r
 - `features/calculator/components/Calculator.tsx` is the one Client Component island.
 - State is a pure reducer (`state.ts`) tested without React; `useCalculator.ts` is a thin hook.
 - `api.ts` validates every response with Zod, so types come from runtime-checked data, not `as` casts.
-- `calculate` is called from the browser (not a Server Action) because the `cid` cookie must travel
-  with the browser's own request.
+- `calculate` is called from the browser through the Next.js rewrite, so there is one origin and no
+  CORS setup; a Server Action would only add a hop.
 
 ## 6. Decisions and trade-offs (say these in your own words)
 
@@ -138,10 +127,9 @@ domain errors into `{status, code, message}`. Unexpected errors are logged and r
 |---|---|---|
 | Integer satang, basis points | No float rounding bugs; rounding is explicit and tested | Slightly less readable numbers |
 | Rules as DB rows + Go constructors | New promo of an existing type is an `INSERT`; the rule logic stays unit-testable and pure | A new *kind* of promo still needs Go code; rules are loaded per request (cheap, cacheable later) |
-| Atomic Lua claim, not `GET` then `SET` | Two concurrent requests cannot both see an empty slot | Needs Redis; the key can be lost if Redis crashes between snapshots or is flushed, so the slot frees early (use AOF if that matters) |
-| Slot holder may re-claim, TTL not extended | Recalculate must not lock the customer out of their own order | Holder keeps the slot even if they remove Red and recalculate |
+| Atomic `SET NX PX`, not `GET` then `SET` | Two concurrent requests cannot both see an empty slot | Needs Redis; the key can be lost if Redis crashes between snapshots or is flushed, so the slot frees early (use AOF if that matters) |
+| No customer identity | The task's rule does not depend on who orders; no accounts, cookies or customer IDs needed | The person who ordered Red is also blocked if they recalculate with Red inside the hour |
 | Claim after validation | An invalid request cannot take the slot | If saving the order then fails, the slot stays held (documented limitation) |
-| Anonymous `cid` cookie | No accounts in scope; unguessable; JS cannot read it | Clearing cookies gives a new identity. Real fix: authentication |
 | GORM for queries, SQL files for schema | Readable, reviewable migrations and constraints; GORM removes row-scanning boilerplate | Two mechanisms (golang-migrate + GORM); AutoMigrate was the alternative |
 | GORM models separate from domain | Domain stays framework-free | A small mapping layer |
 | Server Component + client island | Only the interactive part ships JavaScript | More concepts than a single client page |
@@ -164,7 +152,7 @@ Things worth telling an interviewer:
   caught by a second check. I replaced it with a wrap-around case (four quantities of 2^62 plus 5
   sums to 5 after integer overflow) that only the per-item bound stops. The fix is in commit
   `ec76969`.
-- **Concurrency test.** `TestSlotLimiter_ExactlyOneOfManyConcurrentOwnersWins` runs 50 goroutines
+- **Concurrency test.** `TestSlotLimiter_ExactlyOneOfManyConcurrentClaimsWins` runs 50 goroutines
   racing for the slot and asserts exactly one wins; run under `go test -race`.
 - **Every PDF example is a test** (`domain/pdf_examples_test.go`): Orange x2 = 228.00, Pink x4 = 304.00,
   Green x3 = 116.00, and member 10% after pair discount = 205.20.
@@ -177,9 +165,9 @@ Things worth telling an interviewer:
 
 ## 8. Known limitations and what I would do in production
 
-1. **Identity:** anonymous cookie can be reset by clearing cookies → add real authentication.
-2. **Claim at checkout, not at quote:** today, pricing a Red order reserves the slot (as the task implies), so someone can hold it without buying → a separate checkout step that claims, and an expiry.
-3. **Slot not released** if the customer removes Red and recalculates, or if saving the order fails.
+1. **No identity:** the customer who ordered Red is blocked from recalculating with Red for an hour → with accounts, let the holder re-order.
+2. **Claim at checkout, not at quote:** today, pricing a Red order reserves the slot (as the task implies), so anyone pricing Red can block it for an hour without buying → a separate checkout step that claims, and an expiry.
+3. **Window not released early** if saving the order fails after Red was recorded; it only expires.
 4. **Rules/limits loaded on every request** → in-memory cache with a short TTL or invalidation on change.
 5. **No rate limiting, no idempotency key** on `POST /api/calculate` → add both.
 6. **Observability:** structured logs exist for 500s; add request IDs, metrics (latency, 409 rate), tracing.
@@ -194,15 +182,18 @@ gives a place for each: pricing in a pure domain package, I/O behind interfaces,
 It is overkill for a one-off script or a CRUD admin with no rules. Here the rules are the point, and
 I wanted to unit-test them with no database, so the boundary earns its cost.
 
-**How do you guarantee only one customer gets the Red set under concurrent requests?**
-The claim is a single Lua script that Redis executes atomically: it checks the key and sets it in
-one step, so two requests cannot both see an empty slot. There is a test with 50 goroutines racing
-that asserts exactly one wins, run with the race detector.
+**How do you guarantee only one Red order per hour under concurrent requests?**
+The claim is a single `SET key value NX PX ttl`, which Redis executes atomically: it creates the key
+only if it does not exist. Of any number of simultaneous requests exactly one creates it. There is a
+test with 50 goroutines racing that asserts exactly one wins, run with the race detector.
 
-**Why Lua instead of `SETNX` plus `GET`?**
-`SET key value NX PX ttl` alone covers "first wins", but I also need "the same owner may re-claim
-without extending the TTL", which is a read-then-conditional-write. Doing that from Go would be two
-round trips with a race in between; the script makes it one atomic operation.
+**Why no customer ID or cookie?**
+The rule is "if Red was ordered in the last hour, nobody can order it". That does not depend on who
+is asking, so tracking identity would add complexity (a cookie, a middleware, a column) for no
+behavior. I first built it with an anonymous cookie so the same customer could re-order, then
+simplified when the requirement was clarified. The cost is that the person who ordered Red is also
+blocked if they recalculate with Red in the cart within the hour; with real accounts I would bring
+the "holder may re-order" behavior back.
 
 **What if Redis loses the key?**
 With the default image, Redis writes periodic snapshots, so a clean restart usually keeps the slot,
@@ -223,8 +214,7 @@ and `rule_products`. A genuinely new kind of promotion needs a new `Rule` implem
 `domain/rules.go` with its own tests and one new case in `buildRule`; no existing rule changes.
 
 **How would you scale this to several API instances?**
-The API is stateless: customer identity is in the cookie, the slot is in Redis, data is in
-Postgres. So I can add instances behind a load balancer. The shared pieces to size are the Postgres
+The API is stateless: the Red window is in Redis and data is in Postgres. So I can add instances behind a load balancer. The shared pieces to size are the Postgres
 connection pool and Redis; migrations run at start-up and are idempotent, though in production I
 would run them as a separate job.
 
@@ -233,11 +223,10 @@ Time and IDs are injected (`Clock`, `IDGenerator`), so use cases are determinist
 in-memory fakes for fast tests. Adapters are tested against the real thing: Redis behavior with
 miniredis (including TTL expiry via `FastForward`), and Postgres with a real database in Docker.
 
-**What are the security issues with the anonymous cookie?**
-It is unguessable (a random UUID) and HttpOnly, so a script cannot read it, but it is not
-authentication: clearing cookies creates a new identity, and anyone with the value can act as that
-customer. In production I would add real accounts, set `Secure` (there is a `COOKIE_SECURE` setting),
-and rate-limit the endpoint.
+**What are the security or abuse risks?**
+Anyone can price an order with Red and thereby block it for everyone for an hour, since pricing is
+what records the order. In production I would separate "get a quote" from "place an order", record
+Red only when an order is placed, and add authentication and rate limiting.
 
 **Why Server Components here, and what runs on the client?**
 The menu is read-mostly data, so it is fetched on the server and streamed, and no JavaScript is
@@ -251,7 +240,7 @@ I would cache those briefly.
 
 **What would you do with another week?**
 Authentication and a separate checkout step that claims the Red slot, a cache for rules and limits,
-request IDs and metrics, an end-to-end browser test of the two-customer Red scenario, and CI running
+request IDs and metrics, an end-to-end browser test of the Red scenario, and CI running
 the unit, integration and frontend tests.
 
 **How do you review a junior's change in this codebase?**
@@ -265,12 +254,12 @@ Then naming and whether the change belongs in the domain, a use case or an adapt
 2. Money = int satang; discounts = basis points; round half-up.
 3. Rules run by priority: pair (10) then member (100), member on the running subtotal.
 4. Pair = same colour, `qty / 2` groups.
-5. Red lock = one Lua script; holder may re-claim; TTL never extended; claim after validation.
-6. Identity = HttpOnly `cid` cookie issued by the API; reached via a Next.js rewrite.
+5. Red rule = one `SET NX PX` (atomic); first Red order in the hour wins, the window is never extended; recorded only after validation.
+6. No customer identity: the rule is global ("ordered in the last hour"); the browser reaches the API through a Next.js rewrite.
 7. Errors: handlers return errors; one `mapError`; 500s never leak details.
 8. Frontend: RSC shell + `<Suspense>` menu + one client island; reducer for state; Zod at the boundary.
 9. TDD: red first, mutation check, concurrency test, PDF examples as tests.
-10. Known gaps: auth, checkout-time claim, slot release, rule caching.
+10. Known gaps: quote vs order (pricing records Red), no accounts, rule caching.
 
 Commands:
 

@@ -1,7 +1,7 @@
 # Food Store Calculator
 
 A price calculator for a food store with 7 menu items. A **Go (Fiber) API** prices orders with
-pair and member discounts and enforces a "one customer per hour" limit on the Red set. A
+pair and member discounts and enforces the "one Red order per hour" limit. A
 **Next.js UI** lets a customer pick quantities, enter a member card and see the breakdown.
 Postgres (via GORM) holds products, members, discount rules and orders; Redis holds the Red-set lock.
 
@@ -35,11 +35,10 @@ Cards are case-insensitive and surrounding spaces are ignored.
 
 ### Try the Red set rule
 
-1. Open http://localhost:3000, add a Red set and press Calculate: it works, and that browser now holds the Red slot for 1 hour.
-2. Press Recalculate and Calculate again: still works (the holder may re-order).
-3. Open a **private/incognito window** (a different customer) and order Red: it is rejected.
+1. Open http://localhost:3000, add a Red set and press Calculate: it works, and Red is now recorded as ordered for 1 hour.
+2. Calculate again with Red in the cart (from any browser or window): it is rejected, because Red was already ordered within the hour. Orders without Red still work.
 
-To reset the slot: `docker compose exec redis redis-cli FLUSHALL`.
+To reset the window: `docker compose exec redis redis-cli FLUSHALL`.
 
 ## Pricing rules (from the task)
 
@@ -47,7 +46,7 @@ To reset the slot: `docker compose exec redis redis-cli FLUSHALL`.
 |---|---|
 | Pair discount | Each pair of the **same** colour among Orange, Pink or Green gets 5% off that pair. Pink x4 = two discounted pairs; Green x3 = one discounted pair + one full-price set. |
 | Member discount | A valid member card gives 10% off the total **after** pair discounts. |
-| Red set | Only one customer may order it per hour. |
+| Red set | If a Red set was ordered in the last hour, further Red orders are rejected for everyone until the hour is over. |
 
 Money is handled as integer satang (1/100 THB) to avoid float errors; discounts round half-up.
 
@@ -82,10 +81,9 @@ Response (amounts in satang):
 |---|---|---|
 | 400 | `INVALID_REQUEST` | empty order, unknown product, quantity not 1-1000, malformed JSON |
 | 400 | `INVALID_MEMBER_CARD` | card not found or suspended |
-| 409 | `LIMITED_PRODUCT_UNAVAILABLE` | another customer holds the Red slot |
+| 409 | `LIMITED_PRODUCT_UNAVAILABLE` | Red was already ordered within the last hour |
 | 500 | `INTERNAL` | unexpected failure (details are logged, never returned) |
 
-Customers are identified by an anonymous, HttpOnly `cid` cookie issued by the API.
 
 ## Run the tests
 
@@ -120,7 +118,7 @@ backend/                 Go, Clean Architecture
   cmd/server/            composition root: wires everything together
   internal/domain/       entities, Money, pricing rules (stdlib only)
   internal/usecase/      CalculateOrder, ListProducts + the interfaces they need
-  internal/adapter/      http (Fiber) · postgres (GORM) · redis (Lua claim)
+  internal/adapter/      http (Fiber) · postgres (GORM) · redis (SET NX claim)
   internal/platform/     config, database connection and migrations
   migrations/            SQL schema and seed data
 frontend/                Next.js 16 App Router, TypeScript

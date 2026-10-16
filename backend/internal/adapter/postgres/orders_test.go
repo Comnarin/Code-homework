@@ -18,7 +18,6 @@ func sampleOrder(card string) domain.Order {
 	orange := domain.Product{ID: "orange", Name: "Orange set", Price: 12000}
 	return domain.Order{
 		ID:         uuid.NewString(),
-		CustomerID: "cust-1",
 		MemberCard: card,
 		Lines:      []domain.Line{{Product: orange, Quantity: 2}},
 		Quote: domain.Quote{
@@ -34,7 +33,6 @@ func sampleOrder(card string) domain.Order {
 }
 
 type savedOrderRow struct {
-	CustomerID           string
 	MemberCard           *string
 	TotalBeforeSatang    int
 	MemberDiscountSatang int
@@ -44,7 +42,7 @@ type savedOrderRow struct {
 func loadOrder(t *testing.T, gdb *gorm.DB, id string) savedOrderRow {
 	t.Helper()
 	var row savedOrderRow
-	res := gdb.Raw(`SELECT customer_id, member_card, total_before_satang, member_discount_satang, final_total_satang
+	res := gdb.Raw(`SELECT member_card, total_before_satang, member_discount_satang, final_total_satang
 		FROM orders WHERE id::text = ?`, id).Scan(&row)
 	if res.Error != nil || res.RowsAffected != 1 {
 		t.Fatalf("load order: rows=%d err=%v", res.RowsAffected, res.Error)
@@ -70,7 +68,7 @@ func TestOrderRepository_SaveStoresOrderItemsAndDiscounts(t *testing.T) {
 	}
 
 	row := loadOrder(t, gdb, o.ID)
-	if row.CustomerID != "cust-1" || row.MemberCard == nil || *row.MemberCard != "MEM0001" ||
+	if row.MemberCard == nil || *row.MemberCard != "MEM0001" ||
 		row.TotalBeforeSatang != 24000 || row.MemberDiscountSatang != 2280 || row.FinalTotalSatang != 20520 {
 		t.Fatalf("order row = %+v", row)
 	}

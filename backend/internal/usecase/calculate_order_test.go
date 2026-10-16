@@ -60,7 +60,7 @@ func items(pairs ...any) []ItemInput {
 func TestCalculateOrder_PricesAPairDiscountAndSavesTheOrder(t *testing.T) {
 	f := newFixture(t)
 
-	q, err := f.uc.Execute(context.Background(), CalculateInput{CustomerID: "cust-1", Items: items("orange", 2)})
+	q, err := f.uc.Execute(context.Background(), CalculateInput{Items: items("orange", 2)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestCalculateOrder_PricesAPairDiscountAndSavesTheOrder(t *testing.T) {
 		t.Fatalf("want 1 saved order, got %d", len(f.orders.saved))
 	}
 	o := f.orders.saved[0]
-	if o.ID != "order-1" || o.CustomerID != "cust-1" || !o.CreatedAt.Equal(testNow) || o.MemberCard != "" {
+	if o.ID != "order-1" || !o.CreatedAt.Equal(testNow) || o.MemberCard != "" {
 		t.Fatalf("saved order wrong: %+v", o)
 	}
 	if len(o.Lines) != 1 || o.Lines[0].Product.ID != "orange" || o.Lines[0].Quantity != 2 {
@@ -84,7 +84,7 @@ func TestCalculateOrder_AppliesMemberDiscountAfterPairDiscount(t *testing.T) {
 
 	// Card is entered messily on purpose: the use case normalizes it.
 	q, err := f.uc.Execute(context.Background(), CalculateInput{
-		CustomerID: "cust-1", MemberCard: "  mem0001 ", Items: items("orange", 2),
+		MemberCard: "  mem0001 ", Items: items("orange", 2),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +101,7 @@ func TestCalculateOrder_MergesDuplicateProductLines(t *testing.T) {
 	f := newFixture(t)
 
 	q, err := f.uc.Execute(context.Background(), CalculateInput{
-		CustomerID: "cust-1", Items: items("orange", 1, "orange", 1),
+		Items: items("orange", 1, "orange", 1),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -114,29 +114,45 @@ func TestCalculateOrder_MergesDuplicateProductLines(t *testing.T) {
 	}
 }
 
-func TestCalculateOrder_SameCustomerMayOrderRedTwiceInTheHour(t *testing.T) {
+func TestCalculateOrder_RedOrderedWithinTheHourBlocksTheNextRedOrder(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
-
-	if _, err := f.uc.Execute(ctx, CalculateInput{CustomerID: "cust-1", Items: items("red", 1)}); err != nil {
+	if _, err := f.uc.Execute(ctx, CalculateInput{Items: items("red", 1)}); err != nil {
 		t.Fatal(err)
 	}
-	q, err := f.uc.Execute(ctx, CalculateInput{CustomerID: "cust-1", MemberCard: "MEM0001", Items: items("red", 1)})
+
+	// Anyone asking for Red in the same window is rejected, even with a valid card.
+	_, err := f.uc.Execute(ctx, CalculateInput{MemberCard: "MEM0001", Items: items("red", 1)})
+
+	var held *domain.SlotHeldError
+	if !errors.As(err, &held) || held.ProductName != "Red set" || !errors.Is(err, domain.ErrSlotHeld) {
+		t.Fatalf("err = %v, want SlotHeldError for Red set", err)
+	}
+	if len(f.orders.saved) != 1 {
+		t.Fatalf("the rejected order must not be saved, saved = %d", len(f.orders.saved))
+	}
+}
+
+func TestCalculateOrder_OrdersWithoutRedStillWorkWhileRedIsHeld(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, err := f.uc.Execute(ctx, CalculateInput{Items: items("red", 1)}); err != nil {
+		t.Fatal(err)
+	}
+
+	q, err := f.uc.Execute(ctx, CalculateInput{Items: items("blue", 2)})
 	if err != nil {
-		t.Fatalf("second Red order by the same customer should be allowed: %v", err)
+		t.Fatalf("an order without Red must not be affected: %v", err)
 	}
-	if q.FinalTotal != 4500 { // 5000 - 10% member
-		t.Fatalf("FinalTotal = %d, want 4500", q.FinalTotal)
-	}
-	if len(f.orders.saved) != 2 {
-		t.Fatalf("want 2 saved orders, got %d", len(f.orders.saved))
+	if q.FinalTotal != 6000 {
+		t.Fatalf("FinalTotal = %d, want 6000", q.FinalTotal)
 	}
 }
 
 func TestCalculateOrder_OnlyClaimsSlotsForLimitedProducts(t *testing.T) {
 	f := newFixture(t)
 
-	if _, err := f.uc.Execute(context.Background(), CalculateInput{CustomerID: "cust-1", Items: items("blue", 1, "red", 1)}); err != nil {
+	if _, err := f.uc.Execute(context.Background(), CalculateInput{Items: items("blue", 1, "red", 1)}); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.limiter.claims) != 1 || f.limiter.claims[0] != "red" {
@@ -162,7 +178,7 @@ func TestCalculateOrder_RejectsInvalidRequests(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newFixture(t)
-			_, err := f.uc.Execute(context.Background(), CalculateInput{CustomerID: "cust-1", Items: tt.items})
+			_, err := f.uc.Execute(context.Background(), CalculateInput{Items: tt.items})
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("err = %v, want %v", err, tt.want)
 			}
@@ -178,7 +194,7 @@ func TestCalculateOrder_RejectsUnknownOrSuspendedCardWithoutClaimingRed(t *testi
 		t.Run(card, func(t *testing.T) {
 			f := newFixture(t)
 			_, err := f.uc.Execute(context.Background(), CalculateInput{
-				CustomerID: "cust-1", MemberCard: card, Items: items("red", 1),
+				MemberCard: card, Items: items("red", 1),
 			})
 			if !errors.Is(err, domain.ErrInvalidMemberCard) {
 				t.Fatalf("err = %v, want ErrInvalidMemberCard", err)
@@ -190,30 +206,12 @@ func TestCalculateOrder_RejectsUnknownOrSuspendedCardWithoutClaimingRed(t *testi
 	}
 }
 
-func TestCalculateOrder_DifferentCustomerCannotOrderRedWhileHeld(t *testing.T) {
-	f := newFixture(t)
-	ctx := context.Background()
-	if _, err := f.uc.Execute(ctx, CalculateInput{CustomerID: "cust-1", Items: items("red", 1)}); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := f.uc.Execute(ctx, CalculateInput{CustomerID: "cust-2", MemberCard: "MEM0001", Items: items("red", 1)})
-
-	var held *domain.SlotHeldError
-	if !errors.As(err, &held) || held.ProductName != "Red set" || !errors.Is(err, domain.ErrSlotHeld) {
-		t.Fatalf("err = %v, want SlotHeldError for Red set", err)
-	}
-	if len(f.orders.saved) != 1 {
-		t.Fatalf("the rejected order must not be saved, saved = %d", len(f.orders.saved))
-	}
-}
-
 func TestCalculateOrder_LimiterOutageFailsTheRequestAndSavesNothing(t *testing.T) {
 	f := newFixture(t)
 	boom := errors.New("redis: connection refused")
 	f.limiter.err = boom
 
-	_, err := f.uc.Execute(context.Background(), CalculateInput{CustomerID: "cust-1", Items: items("red", 1)})
+	_, err := f.uc.Execute(context.Background(), CalculateInput{Items: items("red", 1)})
 
 	if !errors.Is(err, boom) || errors.Is(err, domain.ErrSlotHeld) {
 		t.Fatalf("err = %v, want the raw limiter error (not ErrSlotHeld)", err)
@@ -228,7 +226,7 @@ func TestCalculateOrder_SaveFailureIsReturned(t *testing.T) {
 	boom := errors.New("db down")
 	f.orders.err = boom
 
-	if _, err := f.uc.Execute(context.Background(), CalculateInput{CustomerID: "cust-1", Items: items("blue", 1)}); !errors.Is(err, boom) {
+	if _, err := f.uc.Execute(context.Background(), CalculateInput{Items: items("blue", 1)}); !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want %v", err, boom)
 	}
 }
@@ -238,7 +236,7 @@ func TestCalculateOrder_ProductListFailureIsReturned(t *testing.T) {
 	boom := errors.New("db down")
 	f.products.err = boom
 
-	if _, err := f.uc.Execute(context.Background(), CalculateInput{CustomerID: "cust-1", Items: items("blue", 1)}); !errors.Is(err, boom) {
+	if _, err := f.uc.Execute(context.Background(), CalculateInput{Items: items("blue", 1)}); !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want %v", err, boom)
 	}
 }

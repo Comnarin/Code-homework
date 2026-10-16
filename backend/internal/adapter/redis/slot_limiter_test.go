@@ -3,7 +3,6 @@ package redis
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,57 +25,45 @@ func newLimiter(t *testing.T) (*SlotLimiter, *miniredis.Miniredis) {
 	return NewSlotLimiter(client), mr
 }
 
-func TestSlotLimiter_FreeSlotIsClaimedWithTTL(t *testing.T) {
+func TestSlotLimiter_FirstClaimWinsAndExpiresAfterTheWindow(t *testing.T) {
 	l, mr := newLimiter(t)
 
-	if err := l.Claim(context.Background(), "red", "cust-1", time.Hour); err != nil {
+	if err := l.Claim(context.Background(), "red", time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := mr.Get("limit:red:holder"); got != "cust-1" {
-		t.Fatalf("holder = %q, want cust-1", got)
+	if !mr.Exists("limit:red:ordered") {
+		t.Fatal("the claim should be stored under limit:red:ordered")
 	}
-	if ttl := mr.TTL("limit:red:holder"); ttl != time.Hour {
+	if ttl := mr.TTL("limit:red:ordered"); ttl != time.Hour {
 		t.Fatalf("ttl = %v, want 1h", ttl)
 	}
 }
 
-func TestSlotLimiter_SameOwnerMayClaimAgainWithoutExtendingTheTTL(t *testing.T) {
+func TestSlotLimiter_SecondClaimInTheWindowIsRejected(t *testing.T) {
 	l, mr := newLimiter(t)
 	ctx := context.Background()
-	if err := l.Claim(ctx, "red", "cust-1", time.Hour); err != nil {
+	if err := l.Claim(ctx, "red", time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	mr.FastForward(30 * time.Minute)
 
-	if err := l.Claim(ctx, "red", "cust-1", time.Hour); err != nil {
-		t.Fatalf("holder should be able to re-claim: %v", err)
-	}
-	if ttl := mr.TTL("limit:red:holder"); ttl != 30*time.Minute {
-		t.Fatalf("ttl = %v, want 30m (must not be extended)", ttl)
-	}
-}
-
-func TestSlotLimiter_OtherOwnerIsRejectedWhileHeld(t *testing.T) {
-	l, _ := newLimiter(t)
-	ctx := context.Background()
-	if err := l.Claim(ctx, "red", "cust-1", time.Hour); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := l.Claim(ctx, "red", "cust-2", time.Hour); !errors.Is(err, domain.ErrSlotHeld) {
+	if err := l.Claim(ctx, "red", time.Hour); !errors.Is(err, domain.ErrSlotHeld) {
 		t.Fatalf("err = %v, want ErrSlotHeld", err)
+	}
+	if ttl := mr.TTL("limit:red:ordered"); ttl != 30*time.Minute {
+		t.Fatalf("a rejected claim must not extend the window, ttl = %v", ttl)
 	}
 }
 
 func TestSlotLimiter_SlotFreesAfterTheWindow(t *testing.T) {
 	l, mr := newLimiter(t)
 	ctx := context.Background()
-	if err := l.Claim(ctx, "red", "cust-1", time.Hour); err != nil {
+	if err := l.Claim(ctx, "red", time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	mr.FastForward(time.Hour + time.Second)
 
-	if err := l.Claim(ctx, "red", "cust-2", time.Hour); err != nil {
+	if err := l.Claim(ctx, "red", time.Hour); err != nil {
 		t.Fatalf("slot should be free after the window: %v", err)
 	}
 }
@@ -84,32 +71,32 @@ func TestSlotLimiter_SlotFreesAfterTheWindow(t *testing.T) {
 func TestSlotLimiter_ProductsAreIndependent(t *testing.T) {
 	l, _ := newLimiter(t)
 	ctx := context.Background()
-	if err := l.Claim(ctx, "red", "cust-1", time.Hour); err != nil {
+	if err := l.Claim(ctx, "red", time.Hour); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := l.Claim(ctx, "diamond", "cust-2", time.Hour); err != nil {
-		t.Fatalf("a different product has its own slot: %v", err)
+	if err := l.Claim(ctx, "diamond", time.Hour); err != nil {
+		t.Fatalf("a different product has its own window: %v", err)
 	}
 }
 
-func TestSlotLimiter_ExactlyOneOfManyConcurrentOwnersWins(t *testing.T) {
+func TestSlotLimiter_ExactlyOneOfManyConcurrentClaimsWins(t *testing.T) {
 	l, _ := newLimiter(t)
 	var wins atomic.Int32
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
 		wg.Add(1)
-		go func(owner string) {
+		go func() {
 			defer wg.Done()
-			if err := l.Claim(context.Background(), "red", owner, time.Hour); err == nil {
+			if err := l.Claim(context.Background(), "red", time.Hour); err == nil {
 				wins.Add(1)
 			}
-		}(fmt.Sprintf("cust-%d", i))
+		}()
 	}
 	wg.Wait()
 
 	if wins.Load() != 1 {
-		t.Fatalf("%d owners won the slot, want exactly 1", wins.Load())
+		t.Fatalf("%d claims won the window, want exactly 1", wins.Load())
 	}
 }
 
@@ -117,7 +104,7 @@ func TestSlotLimiter_RedisErrorIsReturnedNotMistakenForHeld(t *testing.T) {
 	l, mr := newLimiter(t)
 	mr.Close()
 
-	err := l.Claim(context.Background(), "red", "cust-1", time.Hour)
+	err := l.Claim(context.Background(), "red", time.Hour)
 	if err == nil || errors.Is(err, domain.ErrSlotHeld) {
 		t.Fatalf("err = %v, want a connection error that is not ErrSlotHeld", err)
 	}
