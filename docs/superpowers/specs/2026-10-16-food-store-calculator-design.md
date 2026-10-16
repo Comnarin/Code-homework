@@ -47,31 +47,56 @@ Known limits (documented in `docs/INTERVIEW.md`):
 
 ## 4. Architecture
 
+Backend follows Clean Architecture (Uncle Bob): four concentric layers, and
+source-code dependencies point only inward.
+
 ```
 Code-homework/
   backend/
-    cmd/server/          main.go, wiring only
-    internal/menu/       Product type, ProductRepository interface
-    internal/member/     Member type, MemberRepository interface
-    internal/pricing/    pure calculator, Rule interface and rule types (no I/O)
-    internal/rules/      RuleRepository interface, registry mapping rule rows to pricing.Rule
-    internal/redlimit/   Limiter interface, Redis impl, in-memory fake
-    internal/order/      service: validate, check member, claim limits, price, persist
-    internal/store/      Postgres repositories (products, members, rules, limits, orders)
-    internal/httpapi/    Fiber app, handlers, DTOs, cid middleware, error mapping
-    migrations/          golang-migrate SQL (schema + seed)
-  frontend/              Next.js App Router, TypeScript
-  docker-compose.yml     postgres, redis, api, web
-  docs/                  this spec, plan, INTERVIEW.md
+    cmd/server/                  composition root: wires config, adapters, use cases, Fiber
+    internal/
+      domain/                    LAYER 1: enterprise rules, imports only the standard library
+        product.go member.go     entities (Product, Member)
+        money.go                 Money value object (int satang, rounding)
+        order.go                 Order, OrderLine
+        pricing.go               Calculator, Rule interface, BundlePercent, MemberPercent
+        errors.go                domain errors (ErrInvalidQuantity, ErrUnknownProduct, ...)
+      usecase/                   LAYER 2: application rules; defines ports, depends on domain only
+        ports.go                 ProductRepository, MemberRepository, RuleRepository,
+                                 LimitRepository, OrderRepository, SlotLimiter, Clock, IDGenerator
+        calculate_order.go       CalculateOrder interactor (+ input/output models)
+        list_products.go         ListProducts interactor
+      adapter/                   LAYER 3: interface adapters (translate to/from the outside)
+        http/                    Fiber handlers, request/response DTOs, cid middleware,
+                                 error-to-status mapper, router
+        postgres/                repositories implementing the ports; row -> domain.Rule mapping
+        redis/                   SlotLimiter implementation (Lua script)
+      platform/                  LAYER 4: frameworks and drivers
+        config/                  env loading
+        db/                      pgx pool, golang-migrate runner
+    migrations/                  SQL schema + seed
+  frontend/                      Next.js App Router, TypeScript (section 9)
+  docker-compose.yml             postgres, redis, api, web
+  docs/                          this spec, plan, INTERVIEW.md
   README.md
 ```
 
-Dependency direction: `httpapi -> order -> {pricing, menu, member, rules, redlimit, store}`.
-`pricing` imports nothing from the project. Interfaces are defined where they
-are consumed (consumer-side), so every external dependency has an in-memory
-fake for unit tests.
+Dependency rule: `adapter -> usecase -> domain`; `platform` and `cmd` may import
+anything but nothing imports them. `domain` imports no project package and no
+third-party package. `usecase` never imports Fiber, pgx or go-redis.
 
-## 5. Pricing (`internal/pricing`)
+Ports are interfaces declared in `usecase` (consumer side, "accept interfaces,
+return structs"); adapters implement them. Every port has an in-memory fake for
+unit tests, so the use cases and domain are tested with no database, Redis or
+HTTP. Handlers are thin: parse -> call a use case -> present. Business logic is
+never in a handler or a repository.
+
+Why this layout: it maps one-to-one onto the scoring criteria. Readability: each
+folder has one job. Maintainability: swapping Postgres or Redis touches only an
+adapter. Extensibility: new rule types or endpoints add files and do not edit
+existing ones. Logic: pricing is a pure function you can verify with a table.
+
+## 5. Pricing (`internal/domain/pricing.go`)
 
 - Input: list of `{product, quantity}` lines, `isMember bool`, and `[]Rule` supplied by the caller.
 - `Rule` interface: `Apply(lines, subtotal) []Discount`. Rules run in ascending priority order; item rules run before the member rule, which applies to the subtotal after item discounts.
@@ -80,16 +105,19 @@ fake for unit tests.
 - Output: `TotalBefore`, `ItemDiscounts[] {RuleCode, ProductID, Name, Bundles, Amount}`, `MemberDiscount`, `FinalTotal`.
 - Example (seed rules): Orange x2 = 24000 satang, pair discount 1200, subtotal 22800, member 2280, final 20520.
 
-## 6. Rules and limits (`internal/rules`, `internal/redlimit`)
+## 6. Rules and limits (`adapter/postgres`, `adapter/redis`)
 
-Rules registry: each `rules.type` maps to a constructor that builds a
-`pricing.Rule` from the row and its `rule_products`. An unknown type fails at
-load time with a clear error.
+Rule mapping: the Postgres adapter's `RuleRepository` loads active `rules` rows
+with their `rule_products` and maps each `type` to a domain constructor
+(`domain.NewBundlePercent`, `domain.NewMemberPercent`), which validates its
+parameters. An unknown type fails at load time with a clear error. The domain
+knows nothing about tables.
 
 ```go
-type Limiter interface {
+// declared in usecase/ports.go, implemented in adapter/redis
+type SlotLimiter interface {
     // Claim reserves the slot for productID for ownerID for ttl. It succeeds if
-    // the slot is free or already held by ownerID; otherwise it returns ErrHeld.
+    // the slot is free or already held by ownerID; otherwise it returns domain.ErrSlotHeld.
     Claim(ctx context.Context, productID, ownerID string, ttl time.Duration) error
 }
 ```
@@ -113,7 +141,7 @@ All under `/api`. Errors share one shape: `{ "error": { "code", "message" } }`.
 - `GET /healthz` returns 200 (used by Docker healthchecks).
 - `cid` middleware: if the cookie is missing, generate a random UUID and set `cid` as `HttpOnly; SameSite=Lax; Path=/`; put it in the request context.
 
-Order of operations in `calculate`: validate items -> look up member (if card given) -> load active rules and limits -> price (pure) -> claim limited slots (409 on conflict) -> persist order -> respond.
+Order of operations in the `CalculateOrder` use case: validate items -> look up member (if card given) -> load active rules and limits -> price (pure) -> claim limited slots (409 on conflict) -> persist order -> respond.
 Slots are claimed only after all validation passes, so an invalid request cannot take one.
 
 ## 8. Database (Postgres)
@@ -180,18 +208,57 @@ Migrations run on API start, in Docker Compose.
 
 ## 9. Frontend (Next.js, TypeScript)
 
-- One screen, matching the PDF mockups: product rows with -/+ quantity, card number input, Calculate button. A result view with Total (before discount), Discounted items, Discount from member card, Final total, and Recalculate.
-- `next.config` rewrites `/api/*` to the Go API, so the browser uses one origin and the `cid` cookie needs no CORS setup.
-- Structure: typed API client (`lib/api.ts`), a `useCalculator` hook for state, presentational components, and a THB formatter for satang.
-- Error messages: 409 shows "<Product> is reserved by another customer for up to 1 hour."; `INVALID_MEMBER_CARD` shows "Member card not found."
+Stack (versions checked 2026-10-16): Next.js 16 (App Router, Turbopack), React 19,
+TypeScript strict, Tailwind CSS v4, Zod, Vitest + React Testing Library.
+
+UI: one screen matching the PDF mockups: product rows with -/+ quantity, card
+number input, Calculate button. A result view with Total (before discount),
+Discounted items, Discount from member card, Final total, and Recalculate.
+
+Best practices applied:
+- **Server Components by default.** `app/page.tsx` is a Server Component that fetches
+  `GET /products` on the server (using `API_URL`, the internal Docker address) and
+  passes it to one Client Component island, `Calculator`. Only the interactive part
+  ships JavaScript. Products are cached with `fetch(..., { next: { revalidate: 60 } })`.
+- **Browser calls go through a rewrite.** `next.config.ts` rewrites `/api/*` to the Go
+  API, so the browser uses one origin and the `cid` cookie needs no CORS credential setup.
+  `calculate` is called from the client (not a Server Action) because the cookie must
+  travel with the browser's request; forwarding it through a Server Action adds
+  complexity and no benefit here.
+- **Validate at the boundary.** Zod schemas parse every API response, so types are
+  derived from runtime-checked data (`z.infer`) and not asserted with `as`.
+- **Feature-based structure, logic out of components:**
+  ```
+  frontend/src/
+    app/                  layout.tsx, page.tsx (RSC), globals.css, error.tsx, loading.tsx
+    features/calculator/
+      components/         ProductRow, QuantityStepper, MemberCardInput, ResultSummary
+      hooks/useCalculator.ts   state machine: idle | loading | result | error
+      api.ts              typed calls + Zod schemas
+      types.ts
+    lib/                  money.ts (satang -> "฿1,234.00" via Intl.NumberFormat), http.ts, env.ts
+  ```
+- **State:** `useReducer` inside `useCalculator`; no global store (YAGNI). Quantities are
+  never negative; the stepper disables "-" at 0. Calculate is disabled with an empty cart.
+- **Errors as UI states:** 409 shows "<Product> is reserved by another customer for up to
+  1 hour."; `INVALID_MEMBER_CARD` shows "Member card not found." Errors render in an
+  `aria-live="polite"` region.
+- **Accessibility:** real `<button>` and `<label>` elements, `aria-label` on steppers
+  ("Increase Pink set"), visible focus states, color contrast checked.
+- **Config and build:** typed env access in `lib/env.ts`; `output: "standalone"` for a small
+  Docker image; ESLint flat config (`eslint-config-next`) and `tsc --noEmit` in CI scripts;
+  `noUncheckedIndexedAccess` on.
+- **Mockups vs real data:** the mockups use `$` and sample products; the UI uses THB and
+  the API's real products (D9).
 
 ## 10. Testing (test-first, vertical slices)
 
-- `pricing`: table-driven tests for the PDF examples, the member discount, rounding, mixed orders, the empty order, and inactive/unknown rules.
-- `rules`: registry builds each rule type from rows; unknown type errors.
-- `redlimit`: miniredis tests for same owner, different owner, expiry, and per-product keys.
-- `order` and `httpapi`: fakes for Limiter and repositories; Fiber `app.Test` for status codes, error shapes and `cid` cookie behavior. Includes: same customer orders Red twice in one hour, second with a valid member card (allowed, member discount applied); a different `cid` is rejected with 409; an unknown member card returns 400 and does not claim a slot.
-- `store`: tests against real Postgres (skipped unless `DATABASE_URL` is set; run in Docker Compose), including migrations and seed data.
+- `domain`: table-driven tests for the PDF examples, the member discount, rounding, mixed orders, the empty order, and rule constructor validation. No mocks needed.
+- `usecase`: `CalculateOrder` and `ListProducts` tested with in-memory fakes of every port.
+- `adapter/postgres`: rule row mapping, including unknown type error (integration, below).
+- `adapter/redis`: miniredis tests for same owner, different owner, expiry, and per-product keys.
+- `adapter/http`: Fiber `app.Test` with a fake use case for status codes, error shapes and `cid` cookie behavior. End-to-end scenarios (use case + fakes) include: same customer orders Red twice in one hour, second with a valid member card (allowed, member discount applied); a different `cid` is rejected with 409; an unknown member card returns 400 and does not claim a slot.
+- Postgres integration: repositories, migrations and seed data tested against a real Postgres (skipped unless `DATABASE_URL` is set; run in Docker Compose).
 - Frontend: Vitest and React Testing Library for the hook, quantity controls and result rendering.
 
 ## 11. Delivery
