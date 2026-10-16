@@ -1,0 +1,7 @@
+node_modules/
+.next/
+coverage/
+.env
+.DS_Store
+backend/bin/
+.superpowers/
