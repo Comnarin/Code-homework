@@ -6,7 +6,6 @@ import "time"
 // customer is not a member.
 type Order struct {
 	ID         string
-	CustomerID string
 	MemberCard string
 	Lines      []Line
 	Quote      Quote

@@ -1,0 +1,2 @@
+ALTER TABLE orders ADD COLUMN customer_id text NOT NULL DEFAULT '';
+ALTER TABLE orders ALTER COLUMN customer_id DROP DEFAULT;

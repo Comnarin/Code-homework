@@ -8,16 +8,13 @@ import (
 )
 
 type Deps struct {
-	Products     ProductLister
-	Calculator   OrderCalculator
-	NewID        func() string
-	CookieSecure bool
+	Products   ProductLister
+	Calculator OrderCalculator
 }
 
 func NewApp(d Deps) *fiber.App {
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
 	app.Use(recover.New())
-	app.Use(cidMiddleware(d.NewID, d.CookieSecure))
 
 	h := handlers{products: d.Products, calculator: d.Calculator}
 	app.Get("/healthz", h.health)

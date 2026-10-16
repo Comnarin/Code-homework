@@ -1,5 +1,7 @@
 # Food Store Calculator Implementation Plan
 
+> **Note (revision after execution):** this plan is kept as written. Two things changed during execution: Postgres access uses GORM instead of raw pgx, and customer identity (the `cid` cookie, `customer_id` column and the Lua "holder may re-claim" claim) was removed in favor of a plain `SET NX` "Red ordered in the last hour" rule. See the spec's revision note and the git history for the current design.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a food store price calculator: Go Fiber API (Clean Architecture, Postgres, Redis) and a Next.js UI, built test-first, runnable with `docker compose up`.

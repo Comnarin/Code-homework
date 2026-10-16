@@ -29,7 +29,6 @@ func (r *OrderRepository) Save(ctx context.Context, o domain.Order) error {
 func toOrderModel(o domain.Order) orderModel {
 	m := orderModel{
 		ID:                   o.ID,
-		CustomerID:           o.CustomerID,
 		TotalBeforeSatang:    int64(o.Quote.TotalBefore),
 		MemberDiscountSatang: int64(o.Quote.MemberDiscount()),
 		FinalTotalSatang:     int64(o.Quote.FinalTotal),

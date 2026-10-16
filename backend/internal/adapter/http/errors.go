@@ -38,7 +38,7 @@ func mapError(err error) (int, errorDetail) {
 	case errors.As(err, &held):
 		return fiber.StatusConflict, errorDetail{
 			Code:    "LIMITED_PRODUCT_UNAVAILABLE",
-			Message: fmt.Sprintf("%s is reserved by another customer right now. Please try again later.", held.ProductName),
+			Message: fmt.Sprintf("%s was ordered recently and is not available right now. Please try again later.", held.ProductName),
 		}
 	case errors.Is(err, domain.ErrInvalidMemberCard):
 		return fiber.StatusBadRequest, errorDetail{Code: "INVALID_MEMBER_CARD", Message: "Member card not found."}

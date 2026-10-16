@@ -32,10 +32,10 @@ type OrderRepository interface {
 }
 
 type SlotLimiter interface {
-	// Claim reserves the slot for ownerID. It succeeds if the slot is free or
-	// already held by ownerID (without extending it). If another owner holds
-	// it, the returned error matches domain.ErrSlotHeld.
-	Claim(ctx context.Context, productID domain.ProductID, ownerID string, ttl time.Duration) error
+	// Claim records that productID was just ordered and blocks further orders
+	// of it for ttl. If it was already ordered within the window, the returned
+	// error matches domain.ErrSlotHeld.
+	Claim(ctx context.Context, productID domain.ProductID, ttl time.Duration) error
 }
 
 type Clock interface{ Now() time.Time }

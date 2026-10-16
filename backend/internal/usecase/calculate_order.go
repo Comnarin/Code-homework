@@ -18,7 +18,6 @@ type ItemInput struct {
 }
 
 type CalculateInput struct {
-	CustomerID string
 	MemberCard string // optional, any casing/spacing
 	Items      []ItemInput
 }
@@ -38,8 +37,8 @@ type CalculateOrder struct{ d CalculateOrderDeps }
 
 func NewCalculateOrder(d CalculateOrderDeps) *CalculateOrder { return &CalculateOrder{d: d} }
 
-// Execute validates the request, prices it, reserves any limited products for
-// the customer, saves the order and returns the quote. Nothing is reserved or
+// Execute validates the request, prices it, records any limited products as
+// ordered, saves the order and returns the quote. Nothing is reserved or
 // saved unless every validation step has passed.
 func (u *CalculateOrder) Execute(ctx context.Context, in CalculateInput) (domain.Quote, error) {
 	merged, err := mergeItems(in.Items)
@@ -68,13 +67,12 @@ func (u *CalculateOrder) Execute(ctx context.Context, in CalculateInput) (domain
 		return domain.Quote{}, err
 	}
 
-	if err := u.claimLimited(ctx, in.CustomerID, lines); err != nil {
+	if err := u.claimLimited(ctx, lines); err != nil {
 		return domain.Quote{}, err
 	}
 
 	order := domain.Order{
 		ID:         u.d.IDs.NewID(),
-		CustomerID: in.CustomerID,
 		MemberCard: card,
 		Lines:      lines,
 		Quote:      quote,
@@ -149,9 +147,10 @@ func (u *CalculateOrder) checkMember(ctx context.Context, card string) error {
 	return nil
 }
 
-// claimLimited reserves every ordered product that has an active limit, in
-// product-ID order so concurrent orders cannot deadlock each other.
-func (u *CalculateOrder) claimLimited(ctx context.Context, customerID string, lines []domain.Line) error {
+// claimLimited records every ordered product that has an active limit as
+// ordered, in product-ID order so a multi-product order behaves the same way
+// every time.
+func (u *CalculateOrder) claimLimited(ctx context.Context, lines []domain.Line) error {
 	limits, err := u.d.Limits.ActiveLimits(ctx)
 	if err != nil {
 		return fmt.Errorf("load limits: %w", err)
@@ -164,7 +163,7 @@ func (u *CalculateOrder) claimLimited(ctx context.Context, customerID string, li
 		if !limited {
 			continue
 		}
-		err := u.d.Limiter.Claim(ctx, l.Product.ID, customerID, window)
+		err := u.d.Limiter.Claim(ctx, l.Product.ID, window)
 		switch {
 		case err == nil:
 		case errors.Is(err, domain.ErrSlotHeld):

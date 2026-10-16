@@ -72,10 +72,8 @@ func run() error {
 	})
 
 	app := httpapi.NewApp(httpapi.Deps{
-		Products:     usecase.NewListProducts(products),
-		Calculator:   calculate,
-		NewID:        uuid.NewString,
-		CookieSecure: cfg.CookieSecure,
+		Products:   usecase.NewListProducts(products),
+		Calculator: calculate,
 	})
 
 	go func() {

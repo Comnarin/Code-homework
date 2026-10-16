@@ -35,7 +35,7 @@ export type CalculateResult =
   { ok: true; quote: Quote } | { ok: false; code: string; message: string };
 export type CalculateFn = (req: CalculateRequest) => Promise<CalculateResult>;
 
-/** Called from the browser. Same-origin `/api` is proxied to the Go API, so the `cid` cookie travels with it. */
+/** Called from the browser. Same-origin `/api` is proxied to the Go API, so no CORS setup is needed. */
 export async function calculateOrder(
   req: CalculateRequest,
   fetchFn: typeof fetch = fetch,
@@ -46,7 +46,6 @@ export async function calculateOrder(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(req),
-      credentials: "same-origin",
     });
   } catch {
     return {
