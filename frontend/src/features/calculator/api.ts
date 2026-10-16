@@ -60,7 +60,7 @@ export async function calculateOrder(req: CalculateRequest, fetchFn: typeof fetc
 
 /** Called from a Server Component with the internal API address. */
 export async function fetchProducts(baseUrl: string, fetchFn: typeof fetch = fetch): Promise<Product[]> {
-  const res = await fetchFn(`${baseUrl}/api/products`, { next: { revalidate: 60 } });
+  const res = await fetchFn(`${baseUrl}/api/products`);
   if (!res.ok) throw new Error(`Could not load products (HTTP ${res.status})`);
   return z.array(productSchema).parse(await res.json());
 }
