@@ -26,7 +26,9 @@ type fakeRules struct{ rules []domain.Rule }
 
 func (f *fakeRules) ActiveRules(context.Context) ([]domain.Rule, error) { return f.rules, nil }
 
-type fakeLimits struct{ limits map[domain.ProductID]time.Duration }
+type fakeLimits struct {
+	limits map[domain.ProductID]time.Duration
+}
 
 func (f *fakeLimits) ActiveLimits(context.Context) (map[domain.ProductID]time.Duration, error) {
 	return f.limits, nil
