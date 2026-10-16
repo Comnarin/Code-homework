@@ -240,9 +240,10 @@ Best practices applied:
   ```
 - **State:** `useReducer` inside `useCalculator`; no global store (YAGNI). Quantities are
   never negative; the stepper disables "-" at 0. Calculate is disabled with an empty cart.
-- **Errors as UI states:** 409 shows "<Product> is reserved by another customer for up to
-  1 hour."; `INVALID_MEMBER_CARD` shows "Member card not found." Errors render in an
-  `aria-live="polite"` region.
+- **Errors as UI states:** 409 shows the API message "<Product> is reserved by another
+  customer right now. Please try again later." (the window is data, so the text does not
+  name a duration); `INVALID_MEMBER_CARD` shows "Member card not found." Errors render
+  in a `role="alert"` region.
 - **Accessibility:** real `<button>` and `<label>` elements, `aria-label` on steppers
   ("Increase Pink set"), visible focus states, color contrast checked.
 - **Config and build:** typed env access in `lib/env.ts`; `output: "standalone"` for a small
