@@ -9,6 +9,8 @@
   --color-field: oklch(0.975 0.004 15);
   --color-accent: oklch(0.45 0.14 15); /* focus rings and errors only */
   --color-accent-soft: oklch(0.965 0.02 15);
+  --color-notice: oklch(0.955 0.02 80); /* held Red set, test messages */
+  --color-notice-ink: oklch(0.34 0.05 70);
 }
 
 @theme inline {

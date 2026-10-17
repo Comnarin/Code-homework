@@ -29,3 +29,11 @@ func (l *SlotLimiter) Claim(ctx context.Context, productID domain.ProductID, ttl
 	}
 	return nil
 }
+
+// Reset deletes the claim so the product can be ordered again right away.
+func (l *SlotLimiter) Reset(ctx context.Context, productID domain.ProductID) error {
+	if err := l.client.Del(ctx, slotKey(productID)).Err(); err != nil {
+		return fmt.Errorf("redis reset %s: %w", productID, err)
+	}
+	return nil
+}

@@ -43,7 +43,20 @@ describe("ProductRow", () => {
     expect(onDecrement).toHaveBeenCalledTimes(1);
   });
 
-  it("disables decrease at zero", () => {
+  it("shows the promotion label when the product has one", () => {
+    render(
+      <ProductRow
+        product={pink}
+        quantity={0}
+        promoLabel="5% off each pair"
+        onIncrement={vi.fn()}
+        onDecrement={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/5% off each pair/)).toBeInTheDocument();
+  });
+
+  it("offers only add at zero", () => {
     render(
       <ProductRow
         product={pink}
@@ -53,7 +66,10 @@ describe("ProductRow", () => {
       />,
     );
     expect(
-      screen.getByRole("button", { name: "Decrease Pink set" }),
-    ).toBeDisabled();
+      screen.queryByRole("button", { name: "Decrease Pink set" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Increase Pink set" }),
+    ).toBeInTheDocument();
   });
 });

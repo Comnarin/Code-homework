@@ -31,6 +31,7 @@ type Rule interface {
 
 // Quote is the priced result of an order.
 type Quote struct {
+	Lines       []Line // what was ordered, in order; a copy, safe to keep
 	TotalBefore Money
 	Discounts   []Discount
 	FinalTotal  Money
@@ -73,7 +74,7 @@ func Calculate(lines []Line, isMember bool, rules []Rule) (Quote, error) {
 	ordered := append([]Rule(nil), rules...)
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Priority() < ordered[j].Priority() })
 
-	q := Quote{TotalBefore: total, FinalTotal: total}
+	q := Quote{Lines: append([]Line(nil), lines...), TotalBefore: total, FinalTotal: total}
 	for _, r := range ordered {
 		for _, d := range r.Apply(lines, q.FinalTotal, isMember) {
 			q.Discounts = append(q.Discounts, d)

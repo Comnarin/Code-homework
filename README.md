@@ -13,14 +13,15 @@ Postgres (via GORM) holds products, members, discount rules and orders; Redis ho
 ## Run it
 
 ```bash
+cp .env.example .env     # first time only; set POSTGRES_PASSWORD (and ports if you need)
 docker compose up --build
 ```
 
 | What | URL |
 |---|---|
-| Web UI | http://localhost:3000 |
-| API (direct) | http://localhost:18080 (container port 8080; 18080 avoids clashing with other local services) |
-| Postgres | `localhost:55432`, user `postgres`, password `pw`, database `foodstore` |
+| Web UI | http://localhost:3000 (`WEB_HOST_PORT`) |
+| API (direct) | http://localhost:18080 (`API_HOST_PORT`; the container itself uses 8080, and 18080 avoids clashing with other local services) |
+| Postgres | `localhost:55432` (`POSTGRES_HOST_PORT`), user, password and database from your `.env` |
 
 Stop with `Ctrl+C`. Postgres and Redis keep their data in Docker volumes, so orders and a held Red slot survive a plain stop and restart. For a clean start run `docker compose down -v`.
 
@@ -40,6 +41,22 @@ Cards are case-insensitive and surrounding spaces are ignored.
 
 To reset the window: `docker compose exec redis redis-cli FLUSHALL`.
 
+## Configuration (`.env`)
+
+All settings come from environment variables. Each place that reads them has a committed
+`.env.example` to copy; the real `.env` files are git-ignored, so secrets are never committed.
+
+| File | Used by | Key settings |
+|---|---|---|
+| `.env` (from `.env.example`) | `docker compose` | `POSTGRES_PASSWORD` (required), `POSTGRES_USER`, `POSTGRES_DB`, `POSTGRES_HOST_PORT`, `API_HOST_PORT`, `WEB_HOST_PORT`, `ENABLE_TEST_TOOLS` |
+| `backend/.env` (from `backend/.env.example`) | the API when run outside Docker (`go run ./cmd/server`) | `DATABASE_URL` (required), `REDIS_ADDR`, `PORT`, `ENABLE_TEST_TOOLS` |
+| `frontend/.env` (from `frontend/.env.example`) | `npm run dev` / `npm run build` | `API_URL`, `ENABLE_TEST_TOOLS` |
+
+Real environment variables always win over a `.env` file, and a missing `.env` is fine when the
+variables are set another way (CI, production). Docker images never contain `.env` files.
+`ENABLE_TEST_TOOLS=true` exposes a test-only "reset the Red set limit" endpoint and button; keep it
+`false` anywhere real customers can reach.
+
 ## Pricing rules (from the task)
 
 | Rule | Behavior |
@@ -58,7 +75,9 @@ All errors look like `{"error":{"code":"...","message":"..."}}`.
 |---|---|---|
 | GET | `/healthz` | liveness |
 | GET | `/api/products` | the menu: `[{ "id", "name", "priceSatang" }]` |
+| GET | `/api/promotions` | the active rules (`[{ code, type, percentBp, bundleSize?, productIds? }]`); the UI reads badges and percents from here, so rule changes need no frontend change |
 | POST | `/api/calculate` | price an order |
+| POST | `/api/test/reset-limits` | test aid, only when `ENABLE_TEST_TOOLS=true`: frees the Red set so the one-per-hour rule can be retried (the UI shows a "Reset Red set limit" button when the web container has the same flag) |
 
 Request:
 
@@ -70,6 +89,7 @@ Response (amounts in satang):
 
 ```json
 {
+  "items": [{ "productId": "orange", "name": "Orange set", "quantity": 2, "unitPriceSatang": 12000, "lineTotalSatang": 24000 }],
   "totalBeforeSatang": 24000,
   "itemDiscounts": [{ "ruleCode": "PAIR_5", "productId": "orange", "name": "Orange set", "bundles": 1, "amountSatang": 1200 }],
   "memberDiscountSatang": 2280,
@@ -98,7 +118,7 @@ To include the Postgres integration tests, start Postgres and point `DATABASE_UR
 
 ```bash
 docker compose up -d postgres
-DATABASE_URL='postgres://postgres:pw@localhost:55432/foodstore?sslmode=disable' go test -race -cover ./...
+DATABASE_URL='postgres://postgres:<POSTGRES_PASSWORD from .env>@localhost:55432/foodstore?sslmode=disable' go test -race -cover ./...
 ```
 
 Frontend:

@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { calculateOrder, fetchProducts } from "./api";
+import {
+  calculateOrder,
+  fetchProducts,
+  fetchPromotions,
+  resetLimits,
+} from "./api";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -8,6 +13,15 @@ const json = (body: unknown, status = 200) =>
   });
 
 const validQuote = {
+  items: [
+    {
+      productId: "orange",
+      name: "Orange set",
+      quantity: 2,
+      unitPriceSatang: 12000,
+      lineTotalSatang: 24000,
+    },
+  ],
   totalBeforeSatang: 24000,
   itemDiscounts: [
     {
@@ -42,19 +56,17 @@ describe("calculateOrder", () => {
   });
 
   it("returns the server's error code and message", async () => {
-    const fetchFn = vi
-      .fn()
-      .mockResolvedValue(
-        json(
-          {
-            error: {
-              code: "LIMITED_PRODUCT_UNAVAILABLE",
-              message: "Red set is reserved by another customer right now.",
-            },
+    const fetchFn = vi.fn().mockResolvedValue(
+      json(
+        {
+          error: {
+            code: "LIMITED_PRODUCT_UNAVAILABLE",
+            message: "Red set is reserved by another customer right now.",
           },
-          409,
-        ),
-      );
+        },
+        409,
+      ),
+    );
 
     const result = await calculateOrder(
       { items: [{ productId: "red", quantity: 1 }] },
@@ -137,5 +149,50 @@ describe("fetchProducts", () => {
     const fetchFn = vi.fn().mockResolvedValue(json([{ id: 1 }]));
 
     await expect(fetchProducts("http://api:8080", fetchFn)).rejects.toThrow();
+  });
+});
+
+describe("fetchPromotions", () => {
+  it("parses the live rules", async () => {
+    const rules = [
+      {
+        code: "PAIR_5",
+        type: "BUNDLE_PERCENT",
+        percentBp: 500,
+        bundleSize: 2,
+        productIds: ["yellow"],
+      },
+      { code: "MEMBER_10", type: "MEMBER_PERCENT", percentBp: 1000 },
+    ];
+    const fetchFn = vi.fn().mockResolvedValue(json(rules));
+
+    expect(await fetchPromotions("http://api", fetchFn)).toEqual(rules);
+    expect(fetchFn).toHaveBeenCalledWith("http://api/api/promotions");
+  });
+
+  it("throws on a server error", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(json({}, 500));
+    await expect(fetchPromotions("http://api", fetchFn)).rejects.toThrow();
+  });
+});
+
+describe("resetLimits", () => {
+  it("posts to the test endpoint", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+
+    expect(await resetLimits(fetchFn)).toEqual({ ok: true });
+    expect(fetchFn).toHaveBeenCalledWith("/api/test/reset-limits", {
+      method: "POST",
+    });
+  });
+
+  it("reports a rejected reset and a network failure", async () => {
+    const notFound = vi.fn().mockResolvedValue(json({}, 404));
+    expect((await resetLimits(notFound)).ok).toBe(false);
+
+    const down = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    expect((await resetLimits(down)).ok).toBe(false);
   });
 });

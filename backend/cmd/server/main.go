@@ -36,6 +36,11 @@ func main() {
 }
 
 func run() error {
+	// Local development: read backend/.env if it exists. Real environment
+	// variables (Docker, CI, production) always win over the file.
+	if err := config.LoadDotEnv(".env"); err != nil {
+		return err
+	}
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
 		return err
@@ -60,21 +65,30 @@ func run() error {
 	}
 
 	products := postgres.NewProductRepository(gdb)
+	rules := postgres.NewRuleRepository(gdb)
+	limits := postgres.NewLimitRepository(gdb)
+	limiter := redisadapter.NewSlotLimiter(rdb)
 	calculate := usecase.NewCalculateOrder(usecase.CalculateOrderDeps{
 		Products: products,
 		Members:  postgres.NewMemberRepository(gdb),
-		Rules:    postgres.NewRuleRepository(gdb),
-		Limits:   postgres.NewLimitRepository(gdb),
+		Rules:    rules,
+		Limits:   limits,
 		Orders:   postgres.NewOrderRepository(gdb),
-		Limiter:  redisadapter.NewSlotLimiter(rdb),
+		Limiter:  limiter,
 		Clock:    systemClock{},
 		IDs:      uuidGenerator{},
 	})
 
-	app := httpapi.NewApp(httpapi.Deps{
+	deps := httpapi.Deps{
 		Products:   usecase.NewListProducts(products),
+		Promotions: usecase.NewListPromotions(rules),
 		Calculator: calculate,
-	})
+	}
+	if cfg.EnableTestTools {
+		slog.Warn("test tools enabled: POST /api/test/reset-limits is exposed")
+		deps.ResetLimits = usecase.NewResetLimits(limits, limiter)
+	}
+	app := httpapi.NewApp(deps)
 
 	go func() {
 		<-ctx.Done()

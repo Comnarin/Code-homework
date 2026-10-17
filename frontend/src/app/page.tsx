@@ -1,7 +1,8 @@
 import { Suspense } from "react";
 import { connection } from "next/server";
 import { Calculator } from "@/features/calculator/components/Calculator";
-import { getProducts } from "@/features/calculator/server";
+import { TEST_TOOLS_ENABLED } from "@/lib/env";
+import { getProducts, getPromotions } from "@/features/calculator/server";
 
 export default function Page() {
   return (
@@ -18,8 +19,17 @@ export default function Page() {
 // request time. The static shell above is served immediately.
 async function Menu() {
   await connection();
-  const products = await getProducts();
-  return <Calculator products={products} />;
+  const [products, promotions] = await Promise.all([
+    getProducts(),
+    getPromotions(),
+  ]);
+  return (
+    <Calculator
+      products={products}
+      promotions={promotions}
+      showTestTools={TEST_TOOLS_ENABLED}
+    />
+  );
 }
 
 function MenuSkeleton() {

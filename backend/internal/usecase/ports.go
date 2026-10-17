@@ -36,6 +36,8 @@ type SlotLimiter interface {
 	// of it for ttl. If it was already ordered within the window, the returned
 	// error matches domain.ErrSlotHeld.
 	Claim(ctx context.Context, productID domain.ProductID, ttl time.Duration) error
+	// Reset frees productID's window immediately (test aid).
+	Reset(ctx context.Context, productID domain.ProductID) error
 }
 
 type Clock interface{ Now() time.Time }

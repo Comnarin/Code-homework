@@ -124,3 +124,23 @@ func TestNewMemberPercent_RejectsInvalidConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestDescribe_ExposesRuleParametersSoClientsNeverHardCodeThem(t *testing.T) {
+	bundle, err := NewBundlePercent("PAIR_5", 10, []ProductID{"yellow", "orange"}, 2, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := bundle.Describe()
+	if got.Kind != PromotionBundle || got.PercentBP != 500 || got.BundleSize != 2 ||
+		len(got.ProductIDs) != 2 || got.ProductIDs[0] != "orange" || got.ProductIDs[1] != "yellow" {
+		t.Fatalf("bundle = %+v", got)
+	}
+
+	member, err := NewMemberPercent("MEMBER_10", 100, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := member.Describe(); got.Kind != PromotionMember || got.PercentBP != 1000 {
+		t.Fatalf("member = %+v", got)
+	}
+}

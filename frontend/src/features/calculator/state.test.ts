@@ -10,6 +10,7 @@ import {
 } from "./state";
 
 const quote: Quote = {
+  items: [],
   totalBeforeSatang: 100,
   itemDiscounts: [],
   memberDiscountSatang: 0,

@@ -131,6 +131,7 @@ domain errors into `{status, code, message}`. Unexpected errors are logged and r
 | No customer identity | The task's rule does not depend on who orders; no accounts, cookies or customer IDs needed | The person who ordered Red is also blocked if they recalculate with Red inside the hour |
 | Claim after validation | An invalid request cannot take the slot | If saving the order then fails, the slot stays held (documented limitation) |
 | GORM for queries, SQL files for schema | Readable, reviewable migrations and constraints; GORM removes row-scanning boilerplate | Two mechanisms (golang-migrate + GORM); AutoMigrate was the alternative |
+| Configuration from environment variables, `.env` only as a local convenience (`config.LoadDotEnv`) | Twelve-factor: the same image runs anywhere; real env vars win over the file; secrets stay out of git and out of images | A missing or wrong variable fails at start-up (`DATABASE_URL is required`) instead of silently using a default |
 | GORM models separate from domain | Domain stays framework-free | A small mapping layer |
 | Server Component + client island | Only the interactive part ships JavaScript | More concepts than a single client page |
 | Zod at the API boundary | A changed backend response fails loudly in one place | Extra dependency |

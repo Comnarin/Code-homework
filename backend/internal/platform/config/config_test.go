@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 
@@ -29,5 +33,66 @@ func TestLoad_ReadsOverrides(t *testing.T) {
 func TestLoad_RequiresDatabaseURL(t *testing.T) {
 	if _, err := Load(env(nil)); err == nil {
 		t.Fatal("want an error when DATABASE_URL is missing")
+	}
+}
+
+func TestLoad_TestToolsAreOffUnlessExplicitlyEnabled(t *testing.T) {
+	env := func(v string) func(string) string {
+		return func(k string) string {
+			switch k {
+			case "DATABASE_URL":
+				return "postgres://x"
+			case "ENABLE_TEST_TOOLS":
+				return v
+			}
+			return ""
+		}
+	}
+	if c, _ := Load(env("")); c.EnableTestTools {
+		t.Fatal("test tools must default to off")
+	}
+	if c, _ := Load(env("true")); !c.EnableTestTools {
+		t.Fatal("ENABLE_TEST_TOOLS=true should enable them")
+	}
+}
+
+func writeEnvFile(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestLoadDotEnv_SetsMissingVariablesButNeverOverridesTheRealEnvironment(t *testing.T) {
+	path := writeEnvFile(t, "FOODSTORE_TEST_FROM_FILE=file\nFOODSTORE_TEST_OVERRIDE=file\n")
+	t.Setenv("FOODSTORE_TEST_FROM_FILE", "") // registers cleanup; then make it truly unset
+	os.Unsetenv("FOODSTORE_TEST_FROM_FILE")
+	t.Setenv("FOODSTORE_TEST_OVERRIDE", "real")
+
+	if err := LoadDotEnv(path); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := os.Getenv("FOODSTORE_TEST_FROM_FILE"); got != "file" {
+		t.Fatalf("FROM_FILE = %q, want the value from the file", got)
+	}
+	if got := os.Getenv("FOODSTORE_TEST_OVERRIDE"); got != "real" {
+		t.Fatalf("OVERRIDE = %q, the real environment must win over the file", got)
+	}
+}
+
+func TestLoadDotEnv_MissingFileIsNotAnError(t *testing.T) {
+	if err := LoadDotEnv(filepath.Join(t.TempDir(), "no-such.env")); err != nil {
+		t.Fatalf("a missing .env is normal (production sets real env vars): %v", err)
+	}
+}
+
+func TestLoadDotEnv_MalformedFileIsAnError(t *testing.T) {
+	path := writeEnvFile(t, "BROKEN=\"never closed\n")
+
+	if err := LoadDotEnv(path); err == nil {
+		t.Fatal("a malformed .env should fail loudly, not be half-applied silently")
 	}
 }
