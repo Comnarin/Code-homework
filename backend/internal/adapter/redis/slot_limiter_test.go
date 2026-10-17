@@ -109,3 +109,21 @@ func TestSlotLimiter_RedisErrorIsReturnedNotMistakenForHeld(t *testing.T) {
 		t.Fatalf("err = %v, want a connection error that is not ErrSlotHeld", err)
 	}
 }
+
+func TestSlotLimiter_ResetFreesTheSlotImmediately(t *testing.T) {
+	l, mr := newLimiter(t)
+	ctx := context.Background()
+	if err := l.Claim(ctx, "red", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := l.Reset(ctx, "red"); err != nil {
+		t.Fatal(err)
+	}
+	if mr.Exists("limit:red:ordered") {
+		t.Fatal("reset should delete the claim")
+	}
+	if err := l.Claim(ctx, "red", time.Hour); err != nil {
+		t.Fatalf("red should be orderable again: %v", err)
+	}
+}

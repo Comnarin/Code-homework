@@ -98,3 +98,29 @@ func TestQuote_SplitsItemAndMemberDiscounts(t *testing.T) {
 		t.Fatalf("MemberDiscount = %d, want 2000", got)
 	}
 }
+
+func TestCalculate_QuoteListsTheOrderedLines(t *testing.T) {
+	q, err := Calculate([]Line{{orange, 2}, {blue, 1}}, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(q.Lines) != 2 ||
+		q.Lines[0].Product.ID != "orange" || q.Lines[0].Quantity != 2 ||
+		q.Lines[1].Product.ID != "blue" || q.Lines[1].Quantity != 1 {
+		t.Fatalf("Lines = %+v, want orange x2 then blue x1", q.Lines)
+	}
+}
+
+func TestCalculate_QuoteLinesAreACopyOfTheInput(t *testing.T) {
+	input := []Line{{orange, 2}}
+	q, err := Calculate(input, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	input[0].Quantity = 99
+
+	if q.Lines[0].Quantity != 2 {
+		t.Fatal("changing the caller's slice afterwards must not change the quote")
+	}
+}

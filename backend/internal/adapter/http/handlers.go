@@ -15,13 +15,23 @@ type ProductLister interface {
 	Execute(ctx context.Context) ([]domain.Product, error)
 }
 
+type PromotionLister interface {
+	Execute(ctx context.Context) ([]domain.Promotion, error)
+}
+
+type LimitResetter interface {
+	Execute(ctx context.Context) error
+}
+
 type OrderCalculator interface {
 	Execute(ctx context.Context, in usecase.CalculateInput) (domain.Quote, error)
 }
 
 type handlers struct {
 	products   ProductLister
+	promotions PromotionLister
 	calculator OrderCalculator
+	reset      LimitResetter
 }
 
 func (h handlers) health(c fiber.Ctx) error { return c.SendStatus(fiber.StatusOK) }
@@ -32,6 +42,21 @@ func (h handlers) listProducts(c fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(toProductDTOs(items))
+}
+
+func (h handlers) listPromotions(c fiber.Ctx) error {
+	items, err := h.promotions.Execute(c.Context())
+	if err != nil {
+		return err
+	}
+	return c.JSON(toPromotionDTOs(items))
+}
+
+func (h handlers) resetLimits(c fiber.Ctx) error {
+	if err := h.reset.Execute(c.Context()); err != nil {
+		return err
+	}
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
 func (h handlers) calculate(c fiber.Ctx) error {

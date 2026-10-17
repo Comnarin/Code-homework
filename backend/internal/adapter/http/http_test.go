@@ -256,3 +256,84 @@ func TestNoCustomerCookieIsIssued(t *testing.T) {
 		t.Fatalf("the API identifies no customers, but set a cookie: %q", got)
 	}
 }
+
+type fakePromotions struct{ items []domain.Promotion }
+
+func (f fakePromotions) Execute(context.Context) ([]domain.Promotion, error) { return f.items, nil }
+
+type fakeReset struct{ called bool }
+
+func (f *fakeReset) Execute(context.Context) error { f.called = true; return nil }
+
+func TestGetPromotions_ReturnsRuleParameters(t *testing.T) {
+	app := NewApp(Deps{Promotions: fakePromotions{items: []domain.Promotion{
+		{Code: "PAIR_5", Kind: domain.PromotionBundle, PercentBP: 500, BundleSize: 2, ProductIDs: []domain.ProductID{"yellow"}},
+		{Code: "MEMBER_10", Kind: domain.PromotionMember, PercentBP: 1000},
+	}}})
+	resp, err := app.Test(httptest.NewRequest("GET", "/api/promotions", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+
+	want := `[{"code":"PAIR_5","type":"BUNDLE_PERCENT","percentBp":500,"bundleSize":2,"productIds":["yellow"]},{"code":"MEMBER_10","type":"MEMBER_PERCENT","percentBp":1000}]`
+	if resp.StatusCode != 200 || string(raw) != want {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
+	}
+}
+
+func TestResetLimitsRoute_ExistsOnlyWhenEnabled(t *testing.T) {
+	off := NewApp(Deps{})
+	resp, _ := off.Test(httptest.NewRequest("POST", "/api/test/reset-limits", nil))
+	if resp.StatusCode != 404 {
+		t.Fatalf("disabled status = %d, want 404", resp.StatusCode)
+	}
+
+	reset := &fakeReset{}
+	on := NewApp(Deps{ResetLimits: reset})
+	resp, _ = on.Test(httptest.NewRequest("POST", "/api/test/reset-limits", nil))
+	if resp.StatusCode != 204 || !reset.called {
+		t.Fatalf("enabled status = %d called = %v", resp.StatusCode, reset.called)
+	}
+}
+
+func TestPostCalculate_ListsEachOrderedProductWithUnitPriceAndLineTotal(t *testing.T) {
+	calc := &fakeCalculator{quote: domain.Quote{
+		TotalBefore: 27000,
+		Lines: []domain.Line{
+			{Product: domain.Product{ID: "orange", Name: "Orange set", Price: 12000}, Quantity: 2},
+			{Product: domain.Product{ID: "blue", Name: "Blue set", Price: 3000}, Quantity: 1},
+		},
+		FinalTotal: 27000,
+	}}
+	e := newEnv(t, calc, fakeLister{})
+
+	resp, body := e.do(t, "POST", "/api/calculate", `{"items":[{"productId":"orange","quantity":2},{"productId":"blue","quantity":1}]}`)
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	var got struct {
+		Items []struct {
+			ProductID       string `json:"productId"`
+			Name            string `json:"name"`
+			Quantity        int    `json:"quantity"`
+			UnitPriceSatang int    `json:"unitPriceSatang"`
+			LineTotalSatang int    `json:"lineTotalSatang"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Items) != 2 {
+		t.Fatalf("items = %+v, want 2", got.Items)
+	}
+	first, second := got.Items[0], got.Items[1]
+	if first.ProductID != "orange" || first.Name != "Orange set" || first.Quantity != 2 ||
+		first.UnitPriceSatang != 12000 || first.LineTotalSatang != 24000 {
+		t.Fatalf("first item = %+v", first)
+	}
+	if second.ProductID != "blue" || second.Quantity != 1 || second.LineTotalSatang != 3000 {
+		t.Fatalf("second item = %+v", second)
+	}
+}

@@ -2,12 +2,13 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_PASSWORD: pw
-      POSTGRES_DB: foodstore
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Copy .env.example to .env first}
+      POSTGRES_DB: ${POSTGRES_DB:-foodstore}
     ports:
-      - "55432:5432"
+      - "${POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d foodstore"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-foodstore}"]
       interval: 3s
       timeout: 3s
       retries: 20
@@ -23,11 +24,13 @@ services:
   api:
     build: ./backend
     environment:
-      DATABASE_URL: postgres://postgres:pw@postgres:5432/foodstore?sslmode=disable
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Copy .env.example to .env first}@postgres:5432/${POSTGRES_DB:-foodstore}?sslmode=disable
       REDIS_ADDR: redis:6379
       PORT: "8080"
+      # Test aid: exposes POST /api/test/reset-limits. Keep false for production.
+      ENABLE_TEST_TOOLS: ${ENABLE_TEST_TOOLS:-false}
     ports:
-      - "18080:8080"
+      - "${API_HOST_PORT:-18080}:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -46,8 +49,9 @@ services:
         API_URL: http://api:8080
     environment:
       API_URL: http://api:8080
+      ENABLE_TEST_TOOLS: ${ENABLE_TEST_TOOLS:-false}
     ports:
-      - "3000:3000"
+      - "${WEB_HOST_PORT:-3000}:3000"
     depends_on:
       api:
         condition: service_healthy

@@ -70,6 +70,14 @@ func (f *fakeLimiter) Claim(_ context.Context, p domain.ProductID, _ time.Durati
 	return nil
 }
 
+func (f *fakeLimiter) Reset(_ context.Context, p domain.ProductID) error {
+	if f.err != nil {
+		return f.err
+	}
+	delete(f.held, p)
+	return nil
+}
+
 type fixedClock struct{ t time.Time }
 
 func (c fixedClock) Now() time.Time { return c.t }
