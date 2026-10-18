@@ -23,8 +23,14 @@
   color-scheme: light;
 }
 
+/* The sticky action bar covers the bottom of the screen: keep anything that is
+   scrolled or focused into view above it, so it is never hidden behind it. */
+html {
+  scroll-padding-bottom: 9rem;
+}
+
 body {
-  background: white;
+  background: var(--color-field);
   color: var(--color-ink);
   font-family: var(--font-sans), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;

@@ -7,9 +7,9 @@ import (
 )
 
 func TestListProducts_ReturnsTheCatalog(t *testing.T) {
-	uc := NewListProducts(&fakeProducts{items: seedProducts()})
+	uc := NewProducts(&fakeProducts{items: seedProducts()})
 
-	got, err := uc.Execute(context.Background())
+	got, err := uc.List(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,9 +20,9 @@ func TestListProducts_ReturnsTheCatalog(t *testing.T) {
 
 func TestListProducts_PropagatesRepositoryErrors(t *testing.T) {
 	boom := errors.New("db down")
-	uc := NewListProducts(&fakeProducts{err: boom})
+	uc := NewProducts(&fakeProducts{err: boom})
 
-	if _, err := uc.Execute(context.Background()); !errors.Is(err, boom) {
+	if _, err := uc.List(context.Background()); !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want %v", err, boom)
 	}
 }

@@ -8,10 +8,11 @@ package postgres
 import "time"
 
 type productModel struct {
-	ID          string `gorm:"column:id;primaryKey"`
-	Name        string `gorm:"column:name"`
-	PriceSatang int64  `gorm:"column:price_satang"`
-	SortOrder   int    `gorm:"column:sort_order"`
+	ID          string  `gorm:"column:id;primaryKey"`
+	Name        string  `gorm:"column:name"`
+	PriceSatang int64   `gorm:"column:price_satang"`
+	SortOrder   int     `gorm:"column:sort_order"`
+	ImageKey    *string `gorm:"column:image_key"`
 }
 
 func (productModel) TableName() string { return "products" }
@@ -28,7 +29,7 @@ type ruleModel struct {
 	ID         int                `gorm:"column:id;primaryKey"`
 	Code       string             `gorm:"column:code"`
 	Type       string             `gorm:"column:type"`
-	PercentBP  int                `gorm:"column:percent_bp"`
+	Percent    int                `gorm:"column:percent"`
 	BundleSize *int               `gorm:"column:bundle_size"`
 	Priority   int                `gorm:"column:priority"`
 	Active     bool               `gorm:"column:active"`

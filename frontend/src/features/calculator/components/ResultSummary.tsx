@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { formatTHB } from "@/lib/money";
 import type { Quote } from "../api";
 import { swatchFor } from "../swatches";
@@ -17,11 +18,24 @@ export function ResultSummary({ quote, promotions, onRecalculate }: Props) {
     0,
   );
   const afterPairs = quote.totalBeforeSatang - itemDiscountTotal;
-  const memberPercentBp = promotions?.memberPercentBp ?? null;
+  const memberPercent = promotions?.memberPercent ?? null;
+
+  // The form this replaces is gone, so move focus to the new content for
+  // keyboard and screen reader users instead of leaving it on nothing.
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, []);
 
   return (
     <div className="flex flex-col">
-      <h2 className="mt-4 text-2xl font-semibold tracking-tight">Your total</h2>
+      <h2
+        ref={headingRef}
+        tabIndex={-1}
+        className="mt-4 text-2xl font-semibold tracking-tight outline-none"
+      >
+        Your total
+      </h2>
       <p className="mt-1 text-ink-soft">
         Every line below adds up to the final price.
       </p>
@@ -89,7 +103,7 @@ export function ResultSummary({ quote, promotions, onRecalculate }: Props) {
               {quote.itemDiscounts.map((d) => {
                 const rule = promotions?.bundleRules[d.ruleCode];
                 const detail = rule
-                  ? `${d.bundles} ${bundleNoun(rule.bundleSize, d.bundles)} · ${formatPercent(rule.percentBp)} off`
+                  ? `${d.bundles} ${bundleNoun(rule.bundleSize, d.bundles)} · ${formatPercent(rule.percent)} off`
                   : null;
                 return (
                   <li
@@ -122,9 +136,9 @@ export function ResultSummary({ quote, promotions, onRecalculate }: Props) {
         <div className="flex items-baseline justify-between gap-4 py-4">
           <div>
             <p>Discount from member card</p>
-            {memberPercentBp !== null && quote.memberDiscountSatang > 0 && (
+            {memberPercent !== null && quote.memberDiscountSatang > 0 && (
               <p className="text-sm text-ink-soft tabular-nums">
-                {formatPercent(memberPercentBp)} of {formatTHB(afterPairs)}
+                {formatPercent(memberPercent)} of {formatTHB(afterPairs)}
               </p>
             )}
           </div>

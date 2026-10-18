@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
+	"time"
 
 	"github.com/comnarin/foodstore/internal/domain"
 )
@@ -20,8 +22,14 @@ type ItemInput struct {
 type CalculateInput struct {
 	MemberCard string // optional, any casing/spacing
 	Items      []ItemInput
+	// ClientKey is an optional stable key for one customer (for example one
+	// browser session). Whoever holds a limited product can price it again
+	// under the same key; any other key is rejected. Without it, every order
+	// is a different holder.
+	ClientKey string
 }
 
+// CalculateOrderDeps are the ports CalculateOrder needs.
 type CalculateOrderDeps struct {
 	Products ProductRepository
 	Members  MemberRepository
@@ -33,9 +41,13 @@ type CalculateOrderDeps struct {
 	IDs      IDGenerator
 }
 
-type CalculateOrder struct{ d CalculateOrderDeps }
+type CalculateOrder struct {
+	d CalculateOrderDeps
+}
 
-func NewCalculateOrder(d CalculateOrderDeps) *CalculateOrder { return &CalculateOrder{d: d} }
+func NewCalculateOrder(d CalculateOrderDeps) *CalculateOrder {
+	return &CalculateOrder{d: d}
+}
 
 // Execute validates the request, prices it, records any limited products as
 // ordered, saves the order and returns the quote. Nothing is reserved or
@@ -46,7 +58,7 @@ func (u *CalculateOrder) Execute(ctx context.Context, in CalculateInput) (domain
 		return domain.Quote{}, err
 	}
 
-	lines, err := u.resolveLines(ctx, merged)
+	carts, err := u.resolveCarts(ctx, merged)
 	if err != nil {
 		return domain.Quote{}, err
 	}
@@ -62,23 +74,31 @@ func (u *CalculateOrder) Execute(ctx context.Context, in CalculateInput) (domain
 	if err != nil {
 		return domain.Quote{}, fmt.Errorf("load rules: %w", err)
 	}
-	quote, err := domain.Calculate(lines, card != "", rules)
+	quote, err := domain.Calculate(carts, card != "", rules)
 	if err != nil {
 		return domain.Quote{}, err
 	}
 
-	if err := u.claimLimited(ctx, lines); err != nil {
+	orderID := u.d.IDs.NewID()
+	holder := in.ClientKey
+	if holder == "" {
+		holder = orderID
+	}
+	claimed, err := u.claimLimited(ctx, carts, holder)
+	if err != nil {
 		return domain.Quote{}, err
 	}
 
 	order := domain.Order{
-		ID:         u.d.IDs.NewID(),
+		ID:         orderID,
 		MemberCard: card,
-		Lines:      lines,
+		Carts:      carts,
 		Quote:      quote,
 		CreatedAt:  u.d.Clock.Now(),
 	}
 	if err := u.d.Orders.Save(ctx, order); err != nil {
+		// The order was not stored, so the customer must be able to try again.
+		u.release(ctx, claimed, holder)
 		return domain.Quote{}, fmt.Errorf("save order: %w", err)
 	}
 	return quote, nil
@@ -116,7 +136,7 @@ func mergeItems(items []ItemInput) ([]mergedItem, error) {
 	return out, nil
 }
 
-func (u *CalculateOrder) resolveLines(ctx context.Context, merged []mergedItem) ([]domain.Line, error) {
+func (u *CalculateOrder) resolveCarts(ctx context.Context, merged []mergedItem) ([]domain.Cart, error) {
 	catalog, err := u.d.Products.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list products: %w", err)
@@ -125,15 +145,15 @@ func (u *CalculateOrder) resolveLines(ctx context.Context, merged []mergedItem) 
 	for _, p := range catalog {
 		byID[p.ID] = p
 	}
-	lines := make([]domain.Line, 0, len(merged))
+	carts := make([]domain.Cart, 0, len(merged))
 	for _, m := range merged {
 		p, ok := byID[m.id]
 		if !ok {
 			return nil, fmt.Errorf("%w: %q", domain.ErrUnknownProduct, m.id)
 		}
-		lines = append(lines, domain.Line{Product: p, Quantity: m.qty})
+		carts = append(carts, domain.Cart{Product: p, Quantity: m.qty})
 	}
-	return lines, nil
+	return carts, nil
 }
 
 func (u *CalculateOrder) checkMember(ctx context.Context, card string) error {
@@ -148,29 +168,53 @@ func (u *CalculateOrder) checkMember(ctx context.Context, card string) error {
 }
 
 // claimLimited records every ordered product that has an active limit as
-// ordered, in product-ID order so a multi-product order behaves the same way
-// every time.
-func (u *CalculateOrder) claimLimited(ctx context.Context, lines []domain.Line) error {
+// ordered by holder, in product-ID order so a multi-product order behaves the
+// same way every time. It returns the products this call newly claimed (a
+// claim holder already had is not included). If any product cannot be claimed,
+// the ones claimed so far are released before the error is returned.
+func (u *CalculateOrder) claimLimited(ctx context.Context, lines []domain.Cart, holder string) ([]domain.ProductID, error) {
 	limits, err := u.d.Limits.ActiveLimits(ctx)
 	if err != nil {
-		return fmt.Errorf("load limits: %w", err)
+		return nil, fmt.Errorf("load limits: %w", err)
 	}
-	ordered := append([]domain.Line(nil), lines...)
+	ordered := append([]domain.Cart(nil), lines...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Product.ID < ordered[j].Product.ID })
 
+	var claimed []domain.ProductID
 	for _, l := range ordered {
 		window, limited := limits[l.Product.ID]
 		if !limited {
 			continue
 		}
-		err := u.d.Limiter.Claim(ctx, l.Product.ID, window)
+		fresh, err := u.d.Limiter.Claim(ctx, l.Product.ID, holder, window)
 		switch {
 		case err == nil:
+			if fresh {
+				claimed = append(claimed, l.Product.ID)
+			}
 		case errors.Is(err, domain.ErrSlotHeld):
-			return &domain.SlotHeldError{ProductID: l.Product.ID, ProductName: l.Product.Name}
+			u.release(ctx, claimed, holder)
+			return nil, &domain.SlotHeldError{ProductID: l.Product.ID, ProductName: l.Product.Name}
 		default:
-			return fmt.Errorf("claim %s: %w", l.Product.ID, err)
+			u.release(ctx, claimed, holder)
+			return nil, fmt.Errorf("claim %s: %w", l.Product.ID, err)
 		}
 	}
-	return nil
+	return claimed, nil
+}
+
+// release gives back claims this request made. It must still work when the
+// request was cancelled, and a failure here is only logged: the claim then
+// simply expires at the end of its window.
+func (u *CalculateOrder) release(ctx context.Context, products []domain.ProductID, holder string) {
+	if len(products) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	for _, id := range products {
+		if err := u.d.Limiter.Release(ctx, id, holder); err != nil {
+			slog.Warn("could not release limited product after a failed order", "product", id, "err", err)
+		}
+	}
 }

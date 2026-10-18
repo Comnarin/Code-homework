@@ -1,8 +1,11 @@
 package httpapi
 
 import (
-	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"mime"
+	"strings"
 
 	"github.com/gofiber/fiber/v3"
 
@@ -10,42 +13,63 @@ import (
 	"github.com/comnarin/foodstore/internal/usecase"
 )
 
-// The handlers depend on these small interfaces, not on concrete use cases.
-type ProductLister interface {
-	Execute(ctx context.Context) ([]domain.Product, error)
-}
-
-type PromotionLister interface {
-	Execute(ctx context.Context) ([]domain.Promotion, error)
-}
-
-type LimitResetter interface {
-	Execute(ctx context.Context) error
-}
-
-type OrderCalculator interface {
-	Execute(ctx context.Context, in usecase.CalculateInput) (domain.Quote, error)
-}
-
 type handlers struct {
-	products   ProductLister
-	promotions PromotionLister
+	images     ImageGetter
+	products   ProductUsecase
+	promotions PromotionUsecase
 	calculator OrderCalculator
 	reset      LimitResetter
+	ready      ReadinessChecker
 }
+
+// maxClientKeyLength bounds the optional X-Client-Key header.
+const maxClientKeyLength = 128
 
 func (h handlers) health(c fiber.Ctx) error { return c.SendStatus(fiber.StatusOK) }
 
+func (h handlers) readiness(c fiber.Ctx) error {
+	if err := h.ready.Check(c.Context()); err != nil {
+		slog.Error("not ready", "err", err)
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"status": "unavailable"})
+	}
+	return c.JSON(fiber.Map{"status": "ok"})
+}
+
 func (h handlers) listProducts(c fiber.Ctx) error {
-	items, err := h.products.Execute(c.Context())
+	items, err := h.products.List(c.Context())
 	if err != nil {
 		return err
 	}
 	return c.JSON(toProductDTOs(items))
 }
 
+// productImage serves a product's picture, or the default one. Images are
+// untrusted bytes from object storage, so the response is locked down: no type
+// sniffing and a sandboxing policy, even though domain.NewImage already limits
+// what can get here.
+func (h handlers) productImage(c fiber.Ctx) error {
+	res, err := h.images.Execute(c.Context(), c.Params("id"))
+	if errors.Is(err, domain.ErrUnknownProduct) {
+		return fiber.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	c.Set("Content-Type", res.Image.ContentType)
+	c.Set("X-Content-Type-Options", "nosniff")
+	c.Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	if res.Source == usecase.ImageFromStore {
+		c.Set("Cache-Control", "public, max-age=300")
+	} else {
+		// A stand-in must not be cached, or the real picture could not appear
+		// once storage recovers or an image is uploaded.
+		c.Set("Cache-Control", "no-store")
+	}
+	return c.Send(res.Image.Data)
+}
+
 func (h handlers) listPromotions(c fiber.Ctx) error {
-	items, err := h.promotions.Execute(c.Context())
+	items, err := h.promotions.List(c.Context())
 	if err != nil {
 		return err
 	}
@@ -60,12 +84,20 @@ func (h handlers) resetLimits(c fiber.Ctx) error {
 }
 
 func (h handlers) calculate(c fiber.Ctx) error {
+	if mediaType, _, err := mime.ParseMediaType(c.Get(fiber.HeaderContentType)); err != nil || mediaType != fiber.MIMEApplicationJSON {
+		return fiber.ErrUnsupportedMediaType
+	}
+	clientKey := strings.TrimSpace(c.Get("X-Client-Key"))
+	if len(clientKey) > maxClientKeyLength {
+		return fmt.Errorf("%w: client key is too long", errBadRequest)
+	}
 	var req calculateRequest
 	if err := c.Bind().JSON(&req); err != nil {
 		return fmt.Errorf("%w: %v", errBadRequest, err)
 	}
 	in := usecase.CalculateInput{
 		MemberCard: req.MemberCard,
+		ClientKey:  clientKey,
 		Items:      make([]usecase.ItemInput, len(req.Items)),
 	}
 	for i, it := range req.Items {

@@ -7,7 +7,7 @@ import (
 
 func pairRule(t *testing.T) BundlePercent {
 	t.Helper()
-	r, err := NewBundlePercent("PAIR_5", 10, []ProductID{"orange", "pink", "green"}, 2, 500)
+	r, err := NewBundlePercent("PAIR_5", 10, []ProductID{"orange", "pink", "green"}, 2, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -17,21 +17,21 @@ func pairRule(t *testing.T) BundlePercent {
 func TestBundlePercent_Apply(t *testing.T) {
 	tests := []struct {
 		name        string
-		lines       []Line
+		cart        []Cart
 		wantBundles int
 		wantAmount  Money
 		wantNone    bool
 	}{
-		{"one orange is not a pair", []Line{{orange, 1}}, 0, 0, true},
-		{"orange x2 is one pair", []Line{{orange, 2}}, 1, 1200, false},
-		{"pink x4 is two pairs", []Line{{pink, 4}}, 2, 1600, false},
-		{"green x3 is one pair plus a full-price set", []Line{{green, 3}}, 1, 400, false},
-		{"ineligible product gets nothing", []Line{{blue, 6}}, 0, 0, true},
-		{"red gets nothing", []Line{{red, 2}}, 0, 0, true},
+		{"one orange is not a pair", []Cart{{orange, 1}}, 0, 0, true},
+		{"orange x2 is one pair", []Cart{{orange, 2}}, 1, 1200, false},
+		{"pink x4 is two pairs", []Cart{{pink, 4}}, 2, 1600, false},
+		{"green x3 is one pair plus a full-price set", []Cart{{green, 3}}, 1, 400, false},
+		{"ineligible product gets nothing", []Cart{{blue, 6}}, 0, 0, true},
+		{"red gets nothing", []Cart{{red, 2}}, 0, 0, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := pairRule(t).Apply(tt.lines, 0, false)
+			got := pairRule(t).Apply(tt.cart, 0, false)
 			if tt.wantNone {
 				if len(got) != 0 {
 					t.Fatalf("want no discounts, got %+v", got)
@@ -49,14 +49,14 @@ func TestBundlePercent_Apply(t *testing.T) {
 }
 
 func TestBundlePercent_MixedColoursDoNotPairWithEachOther(t *testing.T) {
-	got := pairRule(t).Apply([]Line{{orange, 1}, {pink, 1}}, 0, false)
+	got := pairRule(t).Apply([]Cart{{orange, 1}, {pink, 1}}, 0, false)
 	if len(got) != 0 {
 		t.Fatalf("one orange plus one pink must not form a pair, got %+v", got)
 	}
 }
 
 func TestBundlePercent_DiscountsEachEligibleLineSeparately(t *testing.T) {
-	got := pairRule(t).Apply([]Line{{orange, 2}, {pink, 2}}, 0, false)
+	got := pairRule(t).Apply([]Cart{{orange, 2}, {pink, 2}}, 0, false)
 	if len(got) != 2 || got[0].ProductID != "orange" || got[1].ProductID != "pink" {
 		t.Fatalf("got %+v", got)
 	}
@@ -72,17 +72,17 @@ func TestNewBundlePercent_RejectsInvalidConfig(t *testing.T) {
 		code     string
 		products []ProductID
 		size     int
-		bp       int
+		percent  int
 	}{
-		{"empty code", "", ok, 2, 500},
-		{"no products", "X", nil, 2, 500},
-		{"size below 2", "X", ok, 1, 500},
+		{"empty code", "", ok, 2, 5},
+		{"no products", "X", nil, 2, 5},
+		{"size below 2", "X", ok, 1, 5},
 		{"percent zero", "X", ok, 2, 0},
-		{"percent above 100", "X", ok, 2, 10001},
+		{"percent above 100", "X", ok, 2, 101},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewBundlePercent(tt.code, 10, tt.products, tt.size, tt.bp)
+			_, err := NewBundlePercent(tt.code, 10, tt.products, tt.size, tt.percent)
 			if !errors.Is(err, ErrInvalidRule) {
 				t.Fatalf("err = %v, want ErrInvalidRule", err)
 			}
@@ -91,7 +91,7 @@ func TestNewBundlePercent_RejectsInvalidConfig(t *testing.T) {
 }
 
 func TestMemberPercent_Apply(t *testing.T) {
-	r, err := NewMemberPercent("MEMBER_10", 100, 1000)
+	r, err := NewMemberPercent("MEMBER_10", 100, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,15 +110,15 @@ func TestMemberPercent_Apply(t *testing.T) {
 
 func TestNewMemberPercent_RejectsInvalidConfig(t *testing.T) {
 	for name, tc := range map[string]struct {
-		code string
-		bp   int
+		code    string
+		percent int
 	}{
-		"empty code":    {"", 1000},
+		"empty code":    {"", 10},
 		"percent zero":  {"X", 0},
-		"percent > 100": {"X", 10001},
+		"percent > 100": {"X", 101},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := NewMemberPercent(tc.code, 100, tc.bp); !errors.Is(err, ErrInvalidRule) {
+			if _, err := NewMemberPercent(tc.code, 100, tc.percent); !errors.Is(err, ErrInvalidRule) {
 				t.Fatalf("err = %v, want ErrInvalidRule", err)
 			}
 		})
@@ -126,21 +126,21 @@ func TestNewMemberPercent_RejectsInvalidConfig(t *testing.T) {
 }
 
 func TestDescribe_ExposesRuleParametersSoClientsNeverHardCodeThem(t *testing.T) {
-	bundle, err := NewBundlePercent("PAIR_5", 10, []ProductID{"yellow", "orange"}, 2, 500)
+	bundle, err := NewBundlePercent("PAIR_5", 10, []ProductID{"yellow", "orange"}, 2, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := bundle.Describe()
-	if got.Kind != PromotionBundle || got.PercentBP != 500 || got.BundleSize != 2 ||
+	if got.Kind != PromotionBundle || got.Percent != 5 || got.BundleSize != 2 ||
 		len(got.ProductIDs) != 2 || got.ProductIDs[0] != "orange" || got.ProductIDs[1] != "yellow" {
 		t.Fatalf("bundle = %+v", got)
 	}
 
-	member, err := NewMemberPercent("MEMBER_10", 100, 1000)
+	member, err := NewMemberPercent("MEMBER_10", 100, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := member.Describe(); got.Kind != PromotionMember || got.PercentBP != 1000 {
+	if got := member.Describe(); got.Kind != PromotionMember || got.Percent != 10 {
 		t.Fatalf("member = %+v", got)
 	}
 }

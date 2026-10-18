@@ -19,7 +19,7 @@ func sampleOrder(card string) domain.Order {
 	return domain.Order{
 		ID:         uuid.NewString(),
 		MemberCard: card,
-		Lines:      []domain.Line{{Product: orange, Quantity: 2}},
+		Carts:      []domain.Cart{{Product: orange, Quantity: 2}},
 		Quote: domain.Quote{
 			TotalBefore: 24000,
 			Discounts: []domain.Discount{
@@ -111,7 +111,7 @@ func TestOrderRepository_StoresTheOrderTimestampWeGave(t *testing.T) {
 func TestOrderRepository_FailedSaveLeavesNoPartialRows(t *testing.T) {
 	gdb := testDB(t)
 	o := sampleOrder("MEM0001")
-	o.Lines[0].Product.ID = "no-such-product" // violates the order_items foreign key
+	o.Carts[0].Product.ID = "no-such-product" // violates the order_items foreign key
 
 	if err := NewOrderRepository(gdb).Save(context.Background(), o); err == nil {
 		t.Fatal("want an error for an unknown product")

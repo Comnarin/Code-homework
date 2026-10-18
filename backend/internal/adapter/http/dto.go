@@ -6,12 +6,15 @@ type productDTO struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	PriceSatang int64  `json:"priceSatang"`
+	// ImageUrl always points at the image endpoint, which serves the default
+	// picture when the product has none. The storage key is never exposed.
+	ImageURL string `json:"imageUrl"`
 }
 
 type promotionDTO struct {
 	Code       string   `json:"code"`
 	Type       string   `json:"type"`
-	PercentBP  int      `json:"percentBp"`
+	Percent    int      `json:"percent"`
 	BundleSize int      `json:"bundleSize,omitempty"`
 	ProductIDs []string `json:"productIds,omitempty"`
 }
@@ -51,7 +54,10 @@ type calculateResponse struct {
 func toProductDTOs(items []domain.Product) []productDTO {
 	out := make([]productDTO, 0, len(items))
 	for _, p := range items {
-		out = append(out, productDTO{ID: string(p.ID), Name: p.Name, PriceSatang: int64(p.Price)})
+		out = append(out, productDTO{
+			ID: string(p.ID), Name: p.Name, PriceSatang: int64(p.Price),
+			ImageURL: "/api/products/" + string(p.ID) + "/image",
+		})
 	}
 	return out
 }
@@ -64,7 +70,7 @@ func toPromotionDTOs(items []domain.Promotion) []promotionDTO {
 			ids[i] = string(id)
 		}
 		out = append(out, promotionDTO{
-			Code: p.Code, Type: string(p.Kind), PercentBP: p.PercentBP,
+			Code: p.Code, Type: string(p.Kind), Percent: p.Percent,
 			BundleSize: p.BundleSize, ProductIDs: ids,
 		})
 	}

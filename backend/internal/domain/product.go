@@ -8,6 +8,9 @@ type Product struct {
 	ID    ProductID
 	Name  string
 	Price Money
+	// ImageKey names the product's picture in object storage. Empty means no
+	// picture has been uploaded yet.
+	ImageKey string
 }
 
 type Member struct {
@@ -21,8 +24,8 @@ func NormalizeCard(s string) string {
 	return strings.ToUpper(strings.TrimSpace(s))
 }
 
-// Line is one product and how many sets of it were ordered.
-type Line struct {
+// Cart is one product and how many sets of it were ordered.
+type Cart struct {
 	Product  Product
 	Quantity int
 }

@@ -23,11 +23,11 @@ var testNow = time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	pair, err := domain.NewBundlePercent("PAIR_5", 10, []domain.ProductID{"orange", "pink", "green"}, 2, 500)
+	pair, err := domain.NewBundlePercent("PAIR_5", 10, []domain.ProductID{"orange", "pink", "green"}, 2, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	member, err := domain.NewMemberPercent("MEMBER_10", 100, 1000)
+	member, err := domain.NewMemberPercent("MEMBER_10", 100, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +74,8 @@ func TestCalculateOrder_PricesAPairDiscountAndSavesTheOrder(t *testing.T) {
 	if o.ID != "order-1" || !o.CreatedAt.Equal(testNow) || o.MemberCard != "" {
 		t.Fatalf("saved order wrong: %+v", o)
 	}
-	if len(o.Lines) != 1 || o.Lines[0].Product.ID != "orange" || o.Lines[0].Quantity != 2 {
-		t.Fatalf("saved lines wrong: %+v", o.Lines)
+	if len(o.Carts) != 1 || o.Carts[0].Product.ID != "orange" || o.Carts[0].Quantity != 2 {
+		t.Fatalf("saved carts wrong: %+v", o.Carts)
 	}
 }
 
@@ -109,8 +109,8 @@ func TestCalculateOrder_MergesDuplicateProductLines(t *testing.T) {
 	if q.FinalTotal != 22800 { // one pair discount, as if orange x2
 		t.Fatalf("FinalTotal = %d, want 22800", q.FinalTotal)
 	}
-	if len(f.orders.saved[0].Lines) != 1 {
-		t.Fatalf("duplicate lines should merge, got %+v", f.orders.saved[0].Lines)
+	if len(f.orders.saved[0].Carts) != 1 {
+		t.Fatalf("duplicate carts should merge, got %+v", f.orders.saved[0].Carts)
 	}
 }
 
@@ -238,5 +238,97 @@ func TestCalculateOrder_ProductListFailureIsReturned(t *testing.T) {
 
 	if _, err := f.uc.Execute(context.Background(), CalculateInput{Items: items("blue", 1)}); !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want %v", err, boom)
+	}
+}
+
+func TestCalculateOrder_SaveFailureReleasesTheRedClaim(t *testing.T) {
+	f := newFixture(t)
+	boom := errors.New("db down")
+	f.orders.err = boom
+	ctx := context.Background()
+
+	if _, err := f.uc.Execute(ctx, CalculateInput{Items: items("red", 1)}); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want %v", err, boom)
+	}
+	if len(f.limiter.held) != 0 {
+		t.Fatalf("a failed save must not leave Red held, held = %v", f.limiter.held)
+	}
+
+	f.orders.err = nil
+	if _, err := f.uc.Execute(ctx, CalculateInput{Items: items("red", 1)}); err != nil {
+		t.Fatalf("Red should be orderable after a failed save: %v", err)
+	}
+}
+
+func TestCalculateOrder_SaveFailureKeepsAClaimTheCustomerAlreadyHad(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, err := f.uc.Execute(ctx, CalculateInput{ClientKey: "browser-1", Items: items("red", 1)}); err != nil {
+		t.Fatal(err)
+	}
+
+	f.orders.err = errors.New("db down")
+	if _, err := f.uc.Execute(ctx, CalculateInput{ClientKey: "browser-1", Items: items("red", 1)}); err == nil {
+		t.Fatal("want the save error")
+	}
+	if f.limiter.held["red"] != "browser-1" {
+		t.Fatal("the earlier, successful order's claim must survive a later failed re-price")
+	}
+}
+
+func TestCalculateOrder_ReleaseNeverFreesAnotherHoldersClaim(t *testing.T) {
+	f := newFixture(t)
+	f.orders.err = errors.New("db down")
+	f.limiter.held = map[domain.ProductID]string{"red": "somebody-else"}
+
+	if _, err := f.uc.Execute(context.Background(), CalculateInput{Items: items("red", 1)}); !errors.Is(err, domain.ErrSlotHeld) {
+		t.Fatalf("err = %v, want ErrSlotHeld", err)
+	}
+	if f.limiter.held["red"] != "somebody-else" {
+		t.Fatal("another holder's claim must be left alone")
+	}
+}
+
+func TestCalculateOrder_SameClientKeyCanPriceRedAgain(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, err := f.uc.Execute(ctx, CalculateInput{ClientKey: "browser-1", Items: items("red", 1)}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.uc.Execute(ctx, CalculateInput{ClientKey: "browser-1", Items: items("red", 2)}); err != nil {
+		t.Fatalf("the holder's own repeat calculate must not be rejected: %v", err)
+	}
+	_, err := f.uc.Execute(ctx, CalculateInput{ClientKey: "browser-2", Items: items("red", 1)})
+	if !errors.Is(err, domain.ErrSlotHeld) {
+		t.Fatalf("err = %v, want ErrSlotHeld for a different client key", err)
+	}
+}
+
+func TestCalculateOrder_WithoutAClientKeyEveryOrderIsADifferentHolder(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, err := f.uc.Execute(ctx, CalculateInput{Items: items("red", 1)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.uc.Execute(ctx, CalculateInput{Items: items("red", 1)}); !errors.Is(err, domain.ErrSlotHeld) {
+		t.Fatalf("err = %v, want ErrSlotHeld", err)
+	}
+}
+
+func TestCalculateOrder_RejectedLaterProductReleasesTheEarlierClaim(t *testing.T) {
+	f := newFixture(t)
+	f.limits.limits["yellow"] = time.Hour
+	f.limiter.held = map[domain.ProductID]string{"yellow": "somebody-else"}
+
+	// "red" sorts before "yellow", so it is claimed first and must be given back.
+	_, err := f.uc.Execute(context.Background(), CalculateInput{Items: items("red", 1, "yellow", 1)})
+
+	var held *domain.SlotHeldError
+	if !errors.As(err, &held) || held.ProductName != "Yellow set" {
+		t.Fatalf("err = %v, want SlotHeldError for Yellow set", err)
+	}
+	if _, stillHeld := f.limiter.held["red"]; stillHeld {
+		t.Fatal("Red was claimed for an order that was rejected, so it must be released")
 	}
 }

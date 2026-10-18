@@ -24,7 +24,7 @@ func TestRuleRepository_ActiveRulesMapsSeedRowsToDomainRules(t *testing.T) {
 
 	// Behavior check: the mapped rules price the PDF example correctly.
 	orange := domain.Product{ID: "orange", Name: "Orange set", Price: 12000}
-	q, err := domain.Calculate([]domain.Line{{Product: orange, Quantity: 2}}, true, rules)
+	q, err := domain.Calculate([]domain.Cart{{Product: orange, Quantity: 2}}, true, rules)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestRuleRepository_SkipsInactiveRules(t *testing.T) {
 }
 
 func TestRuleRepository_UnknownRuleTypeFailsLoudly(t *testing.T) {
-	_, err := buildRule(ruleRow{code: "X", typ: "MYSTERY", percentBP: 500, priority: 1})
+	_, err := buildRule(ruleRow{code: "X", typ: "MYSTERY", percent: 5, priority: 1})
 	if !errors.Is(err, domain.ErrInvalidRule) {
 		t.Fatalf("err = %v, want ErrInvalidRule", err)
 	}

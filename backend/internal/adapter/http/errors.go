@@ -12,6 +12,10 @@ import (
 
 var errBadRequest = errors.New("invalid request body")
 
+// invalidRequestMessage is the only text clients get for a malformed order.
+// The detail (which product, which quantity) is logged, not echoed back.
+const invalidRequestMessage = "The order could not be processed. Please check the items and quantities."
+
 type errorBody struct {
 	Error errorDetail `json:"error"`
 }
@@ -46,7 +50,8 @@ func mapError(err error) (int, errorDetail) {
 		errors.Is(err, domain.ErrEmptyOrder),
 		errors.Is(err, domain.ErrInvalidQuantity),
 		errors.Is(err, domain.ErrUnknownProduct):
-		return fiber.StatusBadRequest, errorDetail{Code: "INVALID_REQUEST", Message: err.Error()}
+		slog.Info("invalid request", "err", err)
+		return fiber.StatusBadRequest, errorDetail{Code: "INVALID_REQUEST", Message: invalidRequestMessage}
 	case errors.As(err, &fiberErr) && fiberErr.Code >= 400 && fiberErr.Code < 500:
 		return fiberErr.Code, frameworkClientError(fiberErr)
 	default:
@@ -62,6 +67,8 @@ func frameworkClientError(e *fiber.Error) errorDetail {
 		return errorDetail{Code: "NOT_FOUND", Message: "Route not found."}
 	case fiber.StatusMethodNotAllowed:
 		return errorDetail{Code: "METHOD_NOT_ALLOWED", Message: "Method not allowed for this route."}
+	case fiber.StatusUnsupportedMediaType:
+		return errorDetail{Code: "UNSUPPORTED_MEDIA_TYPE", Message: "Send the request as application/json."}
 	case fiber.StatusRequestEntityTooLarge:
 		return errorDetail{Code: "PAYLOAD_TOO_LARGE", Message: "Request body is too large."}
 	default:

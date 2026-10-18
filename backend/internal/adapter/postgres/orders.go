@@ -9,18 +9,20 @@ import (
 	"github.com/comnarin/foodstore/internal/domain"
 )
 
-type OrderRepository struct{ db *gorm.DB }
+type OrderRepository struct {
+	db *gorm.DB
+}
 
-func NewOrderRepository(db *gorm.DB) *OrderRepository { return &OrderRepository{db: db} }
+func NewOrderRepository(db *gorm.DB) *OrderRepository {
+	return &OrderRepository{db: db}
+}
 
 // Save writes the order, its items and its discounts in one transaction: if
 // any row is rejected (for example an unknown product), nothing is stored.
+// GORM wraps Create, including its associations, in a transaction by default.
 func (r *OrderRepository) Save(ctx context.Context, o domain.Order) error {
 	model := toOrderModel(o)
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return tx.Create(&model).Error // inserts Items and Discounts too
-	})
-	if err != nil {
+	if err := r.db.WithContext(ctx).Create(&model).Error; err != nil { // inserts Items and Discounts too
 		return fmt.Errorf("save order: %w", err)
 	}
 	return nil
@@ -38,7 +40,7 @@ func toOrderModel(o domain.Order) orderModel {
 		card := o.MemberCard
 		m.MemberCard = &card
 	}
-	for _, l := range o.Lines {
+	for _, l := range o.Carts {
 		m.Items = append(m.Items, orderItemModel{OrderID: o.ID, ProductID: string(l.Product.ID), Quantity: l.Quantity})
 	}
 	for _, d := range o.Quote.Discounts {

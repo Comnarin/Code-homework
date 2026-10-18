@@ -11,13 +11,13 @@ import (
 
 func TestResetLimits_FreesEveryLimitedProduct(t *testing.T) {
 	limiter := &fakeLimiter{}
-	_ = limiter.Claim(context.Background(), "red", time.Hour)
+	_, _ = limiter.Claim(context.Background(), "red", "someone", time.Hour)
 	uc := NewResetLimits(&fakeLimits{limits: map[domain.ProductID]time.Duration{"red": time.Hour}}, limiter)
 
 	if err := uc.Execute(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := limiter.Claim(context.Background(), "red", time.Hour); err != nil {
+	if _, err := limiter.Claim(context.Background(), "red", "another", time.Hour); err != nil {
 		t.Fatalf("red should be free after reset: %v", err)
 	}
 }

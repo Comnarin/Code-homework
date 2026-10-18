@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   calculateOrder,
   resetLimits,
@@ -35,12 +35,30 @@ export function Calculator({
     useCalculator(calculate);
   const view = buildPromotionView(promotions);
 
+  // After Recalculate the result disappears, so focus goes to the first
+  // control of the form rather than being lost.
+  const formRef = useRef<HTMLFormElement>(null);
+  const returnFocus = useRef(false);
+  const showingResult = state.status === "result" && !!state.quote;
+  useEffect(() => {
+    if (showingResult || !returnFocus.current) return;
+    returnFocus.current = false;
+    formRef.current
+      ?.querySelector<HTMLElement>(
+        "button:not(:disabled), input:not(:disabled)",
+      )
+      ?.focus();
+  }, [showingResult]);
+
   if (state.status === "result" && state.quote) {
     return (
       <ResultSummary
         quote={state.quote}
         promotions={view}
-        onRecalculate={recalculate}
+        onRecalculate={() => {
+          returnFocus.current = true;
+          recalculate();
+        }}
       />
     );
   }
@@ -50,6 +68,7 @@ export function Calculator({
 
   return (
     <form
+      ref={formRef}
       onSubmit={(e) => {
         e.preventDefault();
         void submit();
@@ -63,7 +82,7 @@ export function Calculator({
         <p className="-mb-2 text-ink-soft">
           Pick your sets and see the price, discounts included.
         </p>
-        <ul className="-mx-2 flex flex-col gap-0.5">
+        <ul className="flex flex-col gap-3">
           {products.map((p) => (
             <ProductRow
               key={p.id}
@@ -89,9 +108,9 @@ export function Calculator({
             className="h-12 rounded-xl border border-line bg-white px-4 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent disabled:text-ink-soft"
           />
           <p id="member-card-hint" className="text-sm text-ink-soft">
-            {view.memberPercentBp === null
+            {view.memberPercent === null
               ? "Optional."
-              : `Optional. Members get ${formatPercent(view.memberPercentBp)} off after pair discounts.`}
+              : `Optional. Members get ${formatPercent(view.memberPercent)} off after pair discounts.`}
           </p>
         </div>
 

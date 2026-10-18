@@ -26,12 +26,12 @@ type Rule interface {
 	Priority() int // lower runs first
 	// Apply returns the discounts this rule grants. subtotal is the running
 	// total after earlier rules.
-	Apply(lines []Line, subtotal Money, isMember bool) []Discount
+	Apply(lines []Cart, subtotal Money, isMember bool) []Discount
 }
 
 // Quote is the priced result of an order.
 type Quote struct {
-	Lines       []Line // what was ordered, in order; a copy, safe to keep
+	Lines       []Cart // what was ordered, in order; a copy, safe to keep
 	TotalBefore Money
 	Discounts   []Discount
 	FinalTotal  Money
@@ -59,7 +59,7 @@ func (q Quote) MemberDiscount() Money {
 
 // Calculate prices lines with rules. It is pure: same input, same output.
 // Lines must have distinct products; the caller merges duplicates.
-func Calculate(lines []Line, isMember bool, rules []Rule) (Quote, error) {
+func Calculate(lines []Cart, isMember bool, rules []Rule) (Quote, error) {
 	if len(lines) == 0 {
 		return Quote{}, ErrEmptyOrder
 	}
@@ -74,9 +74,16 @@ func Calculate(lines []Line, isMember bool, rules []Rule) (Quote, error) {
 	ordered := append([]Rule(nil), rules...)
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Priority() < ordered[j].Priority() })
 
-	q := Quote{Lines: append([]Line(nil), lines...), TotalBefore: total, FinalTotal: total}
+	q := Quote{Lines: append([]Cart(nil), lines...), TotalBefore: total, FinalTotal: total}
 	for _, r := range ordered {
 		for _, d := range r.Apply(lines, q.FinalTotal, isMember) {
+			// Never take off more than is left, so the total cannot go negative.
+			if d.Amount > q.FinalTotal {
+				d.Amount = q.FinalTotal
+			}
+			if d.Amount <= 0 {
+				continue
+			}
 			q.Discounts = append(q.Discounts, d)
 			q.FinalTotal -= d.Amount
 		}

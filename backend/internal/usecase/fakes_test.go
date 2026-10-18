@@ -9,11 +9,27 @@ import (
 )
 
 type fakeProducts struct {
-	items []domain.Product
-	err   error
+	items     []domain.Product
+	err       error
+	listCalls int
 }
 
-func (f *fakeProducts) List(context.Context) ([]domain.Product, error) { return f.items, f.err }
+func (f *fakeProducts) List(context.Context) ([]domain.Product, error) {
+	f.listCalls++
+	return f.items, f.err
+}
+
+func (f *fakeProducts) FindByID(_ context.Context, id domain.ProductID) (domain.Product, bool, error) {
+	if f.err != nil {
+		return domain.Product{}, false, f.err
+	}
+	for _, p := range f.items {
+		if p.ID == id {
+			return p, true, nil
+		}
+	}
+	return domain.Product{}, false, nil
+}
 
 type fakeMembers struct{ byCard map[string]domain.Member }
 
@@ -47,30 +63,46 @@ func (f *fakeOrders) Save(_ context.Context, o domain.Order) error {
 	return nil
 }
 
-// fakeLimiter mimics the Redis semantics: the first claim of a product wins,
-// any later claim in the window gets ErrSlotHeld, whoever asks.
+// fakeLimiter mimics the Redis semantics: the first holder of a product wins,
+// the same holder may claim again, any other holder gets ErrSlotHeld, and
+// Release only frees a claim its caller still owns.
 type fakeLimiter struct {
-	held   map[domain.ProductID]bool
-	claims []domain.ProductID
-	err    error
+	held     map[domain.ProductID]string
+	claims   []domain.ProductID // fresh claims, in order
+	released []domain.ProductID // successful releases, in order
+	err      error
 }
 
-func (f *fakeLimiter) Claim(_ context.Context, p domain.ProductID, _ time.Duration) error {
+func (f *fakeLimiter) Claim(_ context.Context, p domain.ProductID, holder string, _ time.Duration) (bool, error) {
+	if f.err != nil {
+		return false, f.err
+	}
+	if current, ok := f.held[p]; ok {
+		if current == holder {
+			return false, nil
+		}
+		return false, domain.ErrSlotHeld
+	}
+	if f.held == nil {
+		f.held = map[domain.ProductID]string{}
+	}
+	f.held[p] = holder
+	f.claims = append(f.claims, p)
+	return true, nil
+}
+
+func (f *fakeLimiter) Release(_ context.Context, p domain.ProductID, holder string) error {
 	if f.err != nil {
 		return f.err
 	}
-	if f.held[p] {
-		return domain.ErrSlotHeld
+	if f.held[p] == holder {
+		delete(f.held, p)
+		f.released = append(f.released, p)
 	}
-	if f.held == nil {
-		f.held = map[domain.ProductID]bool{}
-	}
-	f.held[p] = true
-	f.claims = append(f.claims, p)
 	return nil
 }
 
-func (f *fakeLimiter) Reset(_ context.Context, p domain.ProductID) error {
+func (f *fakeLimiter) Clear(_ context.Context, p domain.ProductID) error {
 	if f.err != nil {
 		return f.err
 	}
