@@ -5,8 +5,18 @@ import type { CalculateResult, Promotion } from "../api";
 import { Calculator } from "./Calculator";
 
 const products = [
-  { id: "red", name: "Red set", priceSatang: 5000 },
-  { id: "pink", name: "Pink set", priceSatang: 8000 },
+  {
+    id: "red",
+    name: "Red set",
+    priceSatang: 5000,
+    imageUrl: "/api/products/red/image",
+  },
+  {
+    id: "pink",
+    name: "Pink set",
+    priceSatang: 8000,
+    imageUrl: "/api/products/pink/image",
+  },
 ];
 
 const okResult: CalculateResult = {
@@ -170,11 +180,11 @@ describe("Calculator", () => {
       {
         code: "PAIR",
         type: "BUNDLE_PERCENT",
-        percentBp: 700,
+        percent: 7,
         bundleSize: 2,
         productIds: ["red"],
       },
-      { code: "MEMBER", type: "MEMBER_PERCENT", percentBp: 1500 },
+      { code: "MEMBER", type: "MEMBER_PERCENT", percent: 15 },
     ];
     render(
       <Calculator
@@ -238,5 +248,28 @@ describe("Calculator", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(
       "Could not reset the limit.",
     );
+  });
+
+  it("moves focus to the result heading, then back to the form on Recalculate", async () => {
+    render(
+      <Calculator
+        products={products}
+        calculate={vi.fn().mockResolvedValue(okResult)}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Increase Pink set" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Calculate" }));
+
+    const heading = await screen.findByRole("heading", { name: "Your total" });
+    expect(heading).toHaveFocus();
+
+    await userEvent.click(screen.getByRole("button", { name: "Recalculate" }));
+
+    // The first enabled control of the form (the Decrease buttons start disabled).
+    expect(
+      screen.getByRole("button", { name: "Increase Red set" }),
+    ).toHaveFocus();
   });
 });

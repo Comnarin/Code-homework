@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -11,8 +12,11 @@ import (
 
 	"github.com/google/uuid"
 	goredis "github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 
+	"github.com/comnarin/foodstore/internal/adapter/assets"
 	httpapi "github.com/comnarin/foodstore/internal/adapter/http"
+	miniostore "github.com/comnarin/foodstore/internal/adapter/minio"
 	"github.com/comnarin/foodstore/internal/adapter/postgres"
 	redisadapter "github.com/comnarin/foodstore/internal/adapter/redis"
 	"github.com/comnarin/foodstore/internal/platform/config"
@@ -80,9 +84,11 @@ func run() error {
 	})
 
 	deps := httpapi.Deps{
-		Products:   usecase.NewListProducts(products),
-		Promotions: usecase.NewListPromotions(rules),
-		Calculator: calculate,
+		Products:      usecase.NewProducts(products),
+		Promotions:    usecase.NewPromotions(rules),
+		Calculator:    calculate,
+		ProductImages: usecase.NewGetProductImage(products, newImageStore(ctx, cfg), assets.NoImage()),
+		Ready:         readiness(gdb, rdb),
 	}
 	if cfg.EnableTestTools {
 		slog.Warn("test tools enabled: POST /api/test/reset-limits is exposed")
@@ -96,4 +102,45 @@ func run() error {
 	}()
 	slog.Info("listening", "port", cfg.Port)
 	return app.Listen(":" + cfg.Port)
+}
+
+// readiness backs GET /readyz: Postgres and Redis must both answer a ping.
+// MinIO is left out on purpose, because pictures fall back to the default.
+func readiness(gdb *gorm.DB, rdb *goredis.Client) httpapi.ReadyFunc {
+	return func(ctx context.Context) error {
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		sqlDB, err := gdb.DB()
+		if err != nil {
+			return err
+		}
+		if err := sqlDB.PingContext(ctx); err != nil {
+			return fmt.Errorf("postgres: %w", err)
+		}
+		if err := rdb.Ping(ctx).Err(); err != nil {
+			return fmt.Errorf("redis: %w", err)
+		}
+		return nil
+	}
+}
+
+// newImageStore connects product pictures to MinIO when it is configured. It
+// returns nil when it is not, and the use case then serves the default picture.
+// MinIO being down at start-up is only a warning: pictures fall back to the
+// default and start working again on their own once MinIO is back.
+func newImageStore(ctx context.Context, cfg config.Config) usecase.ImageStore {
+	oc := cfg.ObjectStorage
+	if !oc.Enabled() {
+		slog.Info("object storage not configured: every product shows the default picture")
+		return nil
+	}
+	store, err := miniostore.New(oc.Endpoint, oc.AccessKey, oc.SecretKey, oc.Bucket, oc.UseSSL)
+	if err != nil {
+		slog.Warn("object storage disabled: invalid configuration", "err", err)
+		return nil
+	}
+	if err := store.EnsureBucket(ctx); err != nil {
+		slog.Warn("object storage not reachable yet; pictures will use the default until it is", "endpoint", oc.Endpoint, "err", err)
+	}
+	return store
 }

@@ -22,7 +22,11 @@ export async function getProducts(): Promise<Product[]> {
 export async function getPromotions(): Promise<Promotion[]> {
   try {
     return await fetchPromotions(API_URL);
-  } catch {
+  } catch (err) {
+    console.error(
+      "Could not load promotions; showing the menu without them.",
+      err,
+    );
     return [];
   }
 }

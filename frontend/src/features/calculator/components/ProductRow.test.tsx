@@ -1,9 +1,14 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ProductRow } from "./ProductRow";
 
-const pink = { id: "pink", name: "Pink set", priceSatang: 8000 };
+const pink = {
+  id: "pink",
+  name: "Pink set",
+  priceSatang: 8000,
+  imageUrl: "/api/products/pink/image",
+};
 
 describe("ProductRow", () => {
   it("shows the name, price and quantity", () => {
@@ -71,5 +76,37 @@ describe("ProductRow", () => {
     expect(
       screen.getByRole("button", { name: "Increase Pink set" }),
     ).toBeInTheDocument();
+  });
+
+  it("shows the product picture from its imageUrl", () => {
+    const { container } = render(
+      <ProductRow
+        product={pink}
+        quantity={0}
+        onIncrement={vi.fn()}
+        onDecrement={vi.fn()}
+      />,
+    );
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img).toHaveAttribute("src", "/api/products/pink/image");
+    // The name is right beside it, so the picture is decorative for screen readers.
+    expect(img).toHaveAttribute("alt", "");
+  });
+
+  it("falls back to the default picture when the image cannot load", () => {
+    const { container } = render(
+      <ProductRow
+        product={pink}
+        quantity={0}
+        onIncrement={vi.fn()}
+        onDecrement={vi.fn()}
+      />,
+    );
+    const img = container.querySelector("img")!;
+
+    fireEvent.error(img);
+
+    expect(img).toHaveAttribute("src", "/no-image.svg");
   });
 });

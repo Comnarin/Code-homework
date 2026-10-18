@@ -14,7 +14,7 @@ const (
 type Promotion struct {
 	Code       string
 	Kind       PromotionKind
-	PercentBP  int
+	Percent    int
 	BundleSize int         // BundlePercent only
 	ProductIDs []ProductID // BundlePercent only, sorted
 }
@@ -33,9 +33,9 @@ func (r BundlePercent) Describe() Promotion {
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	return Promotion{Code: r.code, Kind: PromotionBundle, PercentBP: r.percentBP, BundleSize: r.size, ProductIDs: ids}
+	return Promotion{Code: r.code, Kind: PromotionBundle, Percent: r.percent, BundleSize: r.size, ProductIDs: ids}
 }
 
 func (r MemberPercent) Describe() Promotion {
-	return Promotion{Code: r.code, Kind: PromotionMember, PercentBP: r.percentBP}
+	return Promotion{Code: r.code, Kind: PromotionMember, Percent: r.percent}
 }

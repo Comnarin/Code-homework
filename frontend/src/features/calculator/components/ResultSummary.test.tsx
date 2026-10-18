@@ -100,11 +100,11 @@ describe("ResultSummary", () => {
       {
         code: "PAIR_5",
         type: "BUNDLE_PERCENT",
-        percentBp: 500,
+        percent: 5,
         bundleSize: 2,
         productIds: ["orange"],
       },
-      { code: "MEMBER_10", type: "MEMBER_PERCENT", percentBp: 1000 },
+      { code: "MEMBER_10", type: "MEMBER_PERCENT", percent: 10 },
     ]);
     render(
       <ResultSummary

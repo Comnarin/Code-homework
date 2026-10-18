@@ -7,6 +7,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-foodstore}
     ports:
       - "${POSTGRES_HOST_PORT:-55432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-foodstore}"]
       interval: 3s
@@ -15,9 +17,30 @@ services:
 
   redis:
     image: redis:7-alpine
+    volumes:
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Product pictures. Optional for the API: if this is stopped or unreachable,
+  # the API serves the built-in "no image" picture and everything else works.
+  minio:
+    image: quay.io/minio/minio:RELEASE.2024-11-07T00-52-20Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Copy .env.example to .env first}
+    ports:
+      - "${MINIO_API_HOST_PORT:-19000}:9000"
+      - "${MINIO_CONSOLE_HOST_PORT:-19001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
       timeout: 3s
       retries: 20
 
@@ -29,6 +52,10 @@ services:
       PORT: "8080"
       # Test aid: exposes POST /api/test/reset-limits. Keep false for production.
       ENABLE_TEST_TOOLS: ${ENABLE_TEST_TOOLS:-false}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?Copy .env.example to .env first}
+      MINIO_BUCKET: ${MINIO_BUCKET:-product-images}
     ports:
       - "${API_HOST_PORT:-18080}:8080"
     depends_on:
@@ -36,8 +63,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # Started, not healthy: the API must come up even if MinIO is slow or broken.
+      minio:
+        condition: service_started
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/readyz"]
       interval: 3s
       timeout: 3s
       retries: 20
@@ -55,3 +85,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

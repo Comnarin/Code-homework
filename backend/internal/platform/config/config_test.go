@@ -96,3 +96,41 @@ func TestLoadDotEnv_MalformedFileIsAnError(t *testing.T) {
 		t.Fatal("a malformed .env should fail loudly, not be half-applied silently")
 	}
 }
+
+func TestLoad_ObjectStorageIsOffUnlessAnEndpointIsGiven(t *testing.T) {
+	c, err := Load(env(map[string]string{"DATABASE_URL": "postgres://x"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ObjectStorage.Enabled() {
+		t.Fatalf("no MINIO_ENDPOINT means no object storage, got %+v", c.ObjectStorage)
+	}
+	if c.ObjectStorage.Bucket != "product-images" {
+		t.Fatalf("default bucket = %q, want product-images", c.ObjectStorage.Bucket)
+	}
+}
+
+func TestLoad_ReadsObjectStorageSettings(t *testing.T) {
+	c, err := Load(env(map[string]string{
+		"DATABASE_URL":     "postgres://x",
+		"MINIO_ENDPOINT":   "minio:9000",
+		"MINIO_ACCESS_KEY": "key",
+		"MINIO_SECRET_KEY": "secret",
+		"MINIO_BUCKET":     "pics",
+		"MINIO_USE_SSL":    "true",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := c.ObjectStorage
+	if !s.Enabled() || s.Endpoint != "minio:9000" || s.AccessKey != "key" || s.SecretKey != "secret" || s.Bucket != "pics" || !s.UseSSL {
+		t.Fatalf("got %+v", s)
+	}
+}
+
+func TestLoad_ObjectStorageNeedsCredentialsWhenEnabled(t *testing.T) {
+	_, err := Load(env(map[string]string{"DATABASE_URL": "postgres://x", "MINIO_ENDPOINT": "minio:9000"}))
+	if err == nil {
+		t.Fatal("an endpoint without MINIO_ACCESS_KEY / MINIO_SECRET_KEY should be rejected at start-up")
+	}
+}

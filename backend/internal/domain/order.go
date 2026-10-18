@@ -7,7 +7,7 @@ import "time"
 type Order struct {
 	ID         string
 	MemberCard string
-	Lines      []Line
+	Carts      []Cart
 	Quote      Quote
 	CreatedAt  time.Time
 }

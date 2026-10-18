@@ -18,7 +18,7 @@ func NewRuleRepository(db *gorm.DB) *RuleRepository { return &RuleRepository{db:
 type ruleRow struct {
 	code       string
 	typ        string
-	percentBP  int
+	percent    int
 	bundleSize *int
 	priority   int
 	products   []string
@@ -41,7 +41,7 @@ func (r *RuleRepository) ActiveRules(ctx context.Context) ([]domain.Rule, error)
 			products[i] = p.ProductID
 		}
 		rule, err := buildRule(ruleRow{
-			code: m.Code, typ: m.Type, percentBP: m.PercentBP,
+			code: m.Code, typ: m.Type, percent: m.Percent,
 			bundleSize: m.BundleSize, priority: m.Priority, products: products,
 		})
 		if err != nil {
@@ -55,7 +55,7 @@ func (r *RuleRepository) ActiveRules(ctx context.Context) ([]domain.Rule, error)
 // buildRule maps a table row to a domain rule. The domain knows nothing about tables.
 func buildRule(row ruleRow) (domain.Rule, error) {
 	switch row.typ {
-	case "BUNDLE_PERCENT":
+	case string(domain.PromotionBundle):
 		if row.bundleSize == nil {
 			return nil, fmt.Errorf("%w: %s has no bundle_size", domain.ErrInvalidRule, row.code)
 		}
@@ -63,9 +63,9 @@ func buildRule(row ruleRow) (domain.Rule, error) {
 		for i, p := range row.products {
 			products[i] = domain.ProductID(p)
 		}
-		return domain.NewBundlePercent(row.code, row.priority, products, *row.bundleSize, row.percentBP)
-	case "MEMBER_PERCENT":
-		return domain.NewMemberPercent(row.code, row.priority, row.percentBP)
+		return domain.NewBundlePercent(row.code, row.priority, products, *row.bundleSize, row.percent)
+	case string(domain.PromotionMember):
+		return domain.NewMemberPercent(row.code, row.priority, row.percent)
 	default:
 		return nil, fmt.Errorf("%w: %s has unknown type %q", domain.ErrInvalidRule, row.code, row.typ)
 	}

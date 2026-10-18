@@ -55,6 +55,33 @@ describe("calculateOrder", () => {
     });
   });
 
+  it("sends the per-session client key so the Red holder can price again", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(json(validQuote));
+
+    await calculateOrder(
+      { items: [{ productId: "red", quantity: 1 }] },
+      fetchFn,
+      () => "browser-1",
+    );
+
+    const [, init] = fetchFn.mock.calls[0]!;
+    expect(init.headers["X-Client-Key"]).toBe("browser-1");
+    expect(JSON.parse(init.body)).not.toHaveProperty("clientKey");
+  });
+
+  it("omits the client key header when there is none", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(json(validQuote));
+
+    await calculateOrder(
+      { items: [{ productId: "red", quantity: 1 }] },
+      fetchFn,
+      () => null,
+    );
+
+    const [, init] = fetchFn.mock.calls[0]!;
+    expect(init.headers).not.toHaveProperty("X-Client-Key");
+  });
+
   it("returns the server's error code and message", async () => {
     const fetchFn = vi.fn().mockResolvedValue(
       json(
@@ -123,16 +150,26 @@ describe("calculateOrder", () => {
 
 describe("fetchProducts", () => {
   it("returns validated products", async () => {
-    const fetchFn = vi
-      .fn()
-      .mockResolvedValue(
-        json([{ id: "red", name: "Red set", priceSatang: 5000 }]),
-      );
+    const fetchFn = vi.fn().mockResolvedValue(
+      json([
+        {
+          id: "red",
+          name: "Red set",
+          priceSatang: 5000,
+          imageUrl: "/api/products/red/image",
+        },
+      ]),
+    );
 
     const products = await fetchProducts("http://api:8080", fetchFn);
 
     expect(products).toEqual([
-      { id: "red", name: "Red set", priceSatang: 5000 },
+      {
+        id: "red",
+        name: "Red set",
+        priceSatang: 5000,
+        imageUrl: "/api/products/red/image",
+      },
     ]);
     expect(fetchFn.mock.calls[0]![0]).toBe("http://api:8080/api/products");
   });
@@ -158,11 +195,11 @@ describe("fetchPromotions", () => {
       {
         code: "PAIR_5",
         type: "BUNDLE_PERCENT",
-        percentBp: 500,
+        percent: 5,
         bundleSize: 2,
         productIds: ["yellow"],
       },
-      { code: "MEMBER_10", type: "MEMBER_PERCENT", percentBp: 1000 },
+      { code: "MEMBER_10", type: "MEMBER_PERCENT", percent: 10 },
     ];
     const fetchFn = vi.fn().mockResolvedValue(json(rules));
 

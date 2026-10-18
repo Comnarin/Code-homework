@@ -7,12 +7,18 @@ import (
 	"github.com/comnarin/foodstore/internal/domain"
 )
 
-// ListPromotions describes the active rules, so the UI never hard-codes them.
-type ListPromotions struct{ rules RuleRepository }
+// Promotions describes the active rules, so the UI never hard-codes them.
+type Promotions struct {
+	rules RuleRepository
+}
 
-func NewListPromotions(rules RuleRepository) *ListPromotions { return &ListPromotions{rules: rules} }
+func NewPromotions(rules RuleRepository) *Promotions {
+	return &Promotions{
+		rules: rules,
+	}
+}
 
-func (u *ListPromotions) Execute(ctx context.Context) ([]domain.Promotion, error) {
+func (u *Promotions) List(ctx context.Context) ([]domain.Promotion, error) {
 	rules, err := u.rules.ActiveRules(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list promotions: %w", err)

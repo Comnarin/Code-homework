@@ -1,15 +1,18 @@
 import { z } from "zod";
+import { getClientKey } from "@/lib/clientKey";
 
 const productSchema = z.object({
   id: z.string(),
   name: z.string(),
   priceSatang: z.number().int(),
+  /** Always set: the endpoint serves a default picture when there is no image. */
+  imageUrl: z.string(),
 });
 
 const promotionSchema = z.object({
   code: z.string(),
   type: z.string(),
-  percentBp: z.number().int(),
+  percent: z.number().int(),
   bundleSize: z.number().int().optional(),
   productIds: z.array(z.string()).optional(),
 });
@@ -59,12 +62,17 @@ export type CalculateFn = (req: CalculateRequest) => Promise<CalculateResult>;
 export async function calculateOrder(
   req: CalculateRequest,
   fetchFn: typeof fetch = fetch,
+  clientKey: () => string | null = getClientKey,
 ): Promise<CalculateResult> {
   let res: Response;
   try {
+    const key = clientKey();
     res = await fetchFn("/api/calculate", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(key ? { "X-Client-Key": key } : {}),
+      },
       body: JSON.stringify(req),
     });
   } catch {

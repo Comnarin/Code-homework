@@ -1,6 +1,7 @@
 import { formatTHB } from "@/lib/money";
 import type { Product } from "../api";
 import { swatchFor } from "../swatches";
+import { ProductImage } from "./ProductImage";
 
 type Props = {
   product: Product;
@@ -11,8 +12,10 @@ type Props = {
   onDecrement: () => void;
 };
 
-const step =
-  "flex size-11 items-center justify-center rounded-full text-xl leading-none text-ink transition-colors duration-150 hover:bg-line active:bg-line focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:text-ink-soft/40 disabled:hover:bg-transparent";
+const circle =
+  "flex size-11 shrink-0 items-center justify-center rounded-full text-xl leading-none transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
+const minus = `${circle} bg-field text-ink hover:bg-line active:bg-line`;
+const plus = `${circle} bg-ink text-white hover:bg-ink/85 active:bg-ink/85`;
 
 export function ProductRow({
   product,
@@ -23,34 +26,46 @@ export function ProductRow({
 }: Props) {
   return (
     <li
-      className={`flex items-center gap-3.5 rounded-2xl px-3 py-2.5 transition-colors duration-150 ${quantity > 0 ? "bg-field" : ""}`}
+      className={`flex items-center gap-4 rounded-3xl bg-white p-3 pr-4 transition-all duration-200 ${
+        quantity > 0
+          ? "shadow-[0_0_0_1px_#F3D8DF,0_8px_24px_-12px_rgba(190,70,100,0.18)]"
+          : "shadow-[0_2px_8px_rgba(40,25,25,0.04),0_8px_24px_-16px_rgba(40,25,25,0.12)]"
+      }`}
     >
-      <span
-        aria-hidden="true"
-        className="size-11 shrink-0 rounded-xl ring-1 ring-inset ring-black/10"
-        style={{ backgroundColor: swatchFor(product.id) }}
+      <ProductImage
+        src={product.imageUrl}
+        className="size-[72px] shrink-0 rounded-2xl bg-field object-cover"
       />
       <div className="min-w-0 flex-1">
         <p className="font-medium leading-tight">{product.name}</p>
-        <p className="mt-0.5 text-sm text-ink-soft tabular-nums">
-          {formatTHB(product.priceSatang)}
-          {promoLabel && ` · ${promoLabel}`}
+        <p className="mt-1 flex items-center gap-1.5 text-sm text-ink-soft tabular-nums">
+          <span
+            aria-hidden="true"
+            className="size-2.5 shrink-0 rounded-full ring-1 ring-inset ring-black/10"
+            style={{ backgroundColor: swatchFor(product.id) }}
+          />
+          <span>{formatTHB(product.priceSatang)}</span>
         </p>
+        {promoLabel && (
+          <p className="mt-0.5 text-balance text-sm text-ink-soft">
+            {promoLabel}
+          </p>
+        )}
       </div>
       {quantity === 0 ? (
         <button
           type="button"
-          className={`${step} border border-line bg-white`}
+          className={plus}
           aria-label={`Increase ${product.name}`}
           onClick={onIncrement}
         >
           +
         </button>
       ) : (
-        <div className="flex items-center rounded-full border border-line bg-white">
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            className={step}
+            className={minus}
             aria-label={`Decrease ${product.name}`}
             onClick={onDecrement}
           >
@@ -58,13 +73,13 @@ export function ProductRow({
           </button>
           <output
             aria-label={`${product.name} quantity`}
-            className="min-w-5 text-center font-semibold tabular-nums"
+            className="min-w-6 text-center text-lg font-semibold tabular-nums"
           >
             {quantity}
           </output>
           <button
             type="button"
-            className={step}
+            className={plus}
             aria-label={`Increase ${product.name}`}
             onClick={onIncrement}
           >
