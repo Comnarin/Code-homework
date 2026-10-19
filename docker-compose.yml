@@ -19,6 +19,8 @@ services:
     image: redis:7-alpine
     volumes:
       - redis-data:/data
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-16379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 3s
@@ -59,6 +61,8 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?Copy .env.example to .env first}
       MINIO_BUCKET: ${MINIO_BUCKET:-product-images}
+      # Redis logical database. The load-test project uses a different one.
+      REDIS_DB: ${REDIS_DB:-0}
     ports:
       - "${API_HOST_PORT:-18080}:8080"
     depends_on:
@@ -85,6 +89,19 @@ services:
       ENABLE_TEST_TOOLS: ${ENABLE_TEST_TOOLS:-false}
     ports:
       - "${WEB_HOST_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # --- Optional: load tests. Use ./loadtest/run.sh (it picks an isolated project). ---
+  k6:
+    profiles: [loadtest]
+    image: grafana/k6:1.2.0
+    environment:
+      BASE_URL: http://api:8080
+    volumes:
+      - ./loadtest:/scripts:ro
+      - ./loadtest/out:/scripts/out:rw
     depends_on:
       api:
         condition: service_healthy
