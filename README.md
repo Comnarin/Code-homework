@@ -317,5 +317,4 @@ Dependency rule: `adapter -> usecase -> domain`. The domain never imports a fram
 driver or the use cases.
 
 More: [design spec](docs/superpowers/specs/2026-10-16-food-store-calculator-design.md) ·
-[implementation plan](docs/superpowers/plans/2026-10-16-food-store-calculator.md) ·
-[interview walkthrough](docs/INTERVIEW.md)
+[implementation plan](docs/superpowers/plans/2026-10-16-food-store-calculator.md)
