@@ -80,25 +80,29 @@ func (u *CalculateOrder) Execute(ctx context.Context, in CalculateInput) (domain
 	}
 
 	orderID := u.d.IDs.NewID()
-	holder := in.ClientKey
-	if holder == "" {
-		holder = orderID
+	order := domain.Order{
+		ID:         orderID,
+		MemberCard: card,
+		ClientKey:  in.ClientKey,
+		Carts:      carts,
+		Quote:      quote,
+		CreatedAt:  u.d.Clock.Now(),
 	}
+	holder := order.Holder()
 	claimed, err := u.claimLimited(ctx, carts, holder)
 	if err != nil {
 		return domain.Quote{}, err
 	}
 
-	order := domain.Order{
-		ID:         orderID,
-		MemberCard: card,
-		Carts:      carts,
-		Quote:      quote,
-		CreatedAt:  u.d.Clock.Now(),
-	}
 	if err := u.d.Orders.Save(ctx, order); err != nil {
 		// The order was not stored, so the customer must be able to try again.
 		u.release(ctx, claimed, holder)
+		var held *domain.SlotHeldError
+		if errors.As(err, &held) {
+			// Postgres is authoritative: another holder owns the window even
+			// though Redis admitted us (Redis was down or lost its data).
+			return domain.Quote{}, err
+		}
 		return domain.Quote{}, fmt.Errorf("save order: %w", err)
 	}
 	return quote, nil
@@ -167,11 +171,17 @@ func (u *CalculateOrder) checkMember(ctx context.Context, card string) error {
 	return nil
 }
 
-// claimLimited records every ordered product that has an active limit as
-// ordered by holder, in product-ID order so a multi-product order behaves the
-// same way every time. It returns the products this call newly claimed (a
-// claim holder already had is not included). If any product cannot be claimed,
-// the ones claimed so far are released before the error is returned.
+// claimLimited asks the Redis gate to record every ordered product that has an
+// active limit as ordered by holder, in product-ID order so a multi-product
+// order behaves the same way every time. It returns the products this call
+// newly claimed (a claim holder already had is not included). If another
+// holder has a product, the claims made so far are released before the error
+// is returned.
+//
+// Redis is only an admission gate: Postgres decides when the order is saved.
+// So if the limiter fails for any other reason, the request does not fail. It
+// carries on without Redis for the remaining products and lets the Postgres
+// guard in Save make the call.
 func (u *CalculateOrder) claimLimited(ctx context.Context, lines []domain.Cart, holder string) ([]domain.ProductID, error) {
 	limits, err := u.d.Limits.ActiveLimits(ctx)
 	if err != nil {
@@ -181,9 +191,13 @@ func (u *CalculateOrder) claimLimited(ctx context.Context, lines []domain.Cart, 
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Product.ID < ordered[j].Product.ID })
 
 	var claimed []domain.ProductID
+	skipRedis := false
 	for _, l := range ordered {
 		window, limited := limits[l.Product.ID]
 		if !limited {
+			continue
+		}
+		if skipRedis {
 			continue
 		}
 		fresh, err := u.d.Limiter.Claim(ctx, l.Product.ID, holder, window)
@@ -196,8 +210,8 @@ func (u *CalculateOrder) claimLimited(ctx context.Context, lines []domain.Cart, 
 			u.release(ctx, claimed, holder)
 			return nil, &domain.SlotHeldError{ProductID: l.Product.ID, ProductName: l.Product.Name}
 		default:
-			u.release(ctx, claimed, holder)
-			return nil, fmt.Errorf("claim %s: %w", l.Product.ID, err)
+			slog.Warn("limiter unavailable; the Postgres guard decides", "product", l.Product.ID, "err", err)
+			skipRedis = true
 		}
 	}
 	return claimed, nil

@@ -519,9 +519,14 @@ func TestPostCalculate_ClientKeyIsOptionalAndBounded(t *testing.T) {
 	}
 }
 
-type fakeReady struct{ err error }
+type fakeReady struct {
+	err      error
+	degraded []string
+}
 
-func (f fakeReady) Check(context.Context) error { return f.err }
+func (f fakeReady) Check(context.Context) (Readiness, error) {
+	return Readiness{Degraded: f.degraded}, f.err
+}
 
 func TestReadyz_ReportsDependencyHealthWithoutLeakingDetail(t *testing.T) {
 	ok := NewApp(Deps{Ready: fakeReady{}})
@@ -546,5 +551,17 @@ func TestHealthz_StaysLivenessOnlyWhenDependenciesAreDown(t *testing.T) {
 	resp, err := app.Test(httptest.NewRequest("GET", "/healthz", nil))
 	if err != nil || resp.StatusCode != 200 {
 		t.Fatalf("healthz must not depend on Postgres or Redis: err=%v", err)
+	}
+}
+
+func TestReadyz_RedisDownIsDegradedButStillReady(t *testing.T) {
+	app := NewApp(Deps{Ready: fakeReady{degraded: []string{"redis"}}})
+	resp, err := app.Test(httptest.NewRequest("GET", "/readyz", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 || !strings.Contains(string(raw), `"degraded"`) || strings.Contains(string(raw), "redis") {
+		t.Fatalf("status=%d body=%s, want 200 degraded without detail", resp.StatusCode, raw)
 	}
 }

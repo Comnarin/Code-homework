@@ -28,13 +28,19 @@ type OrderCalculator interface {
 	Execute(ctx context.Context, in usecase.CalculateInput) (domain.Quote, error)
 }
 
-// ReadinessChecker reports whether the service's dependencies (Postgres,
-// Redis) can be reached right now.
+// Readiness describes a successful readiness check. Degraded names optional
+// dependencies that are down (the service still works without them).
+type Readiness struct {
+	Degraded []string
+}
+
+// ReadinessChecker reports whether the service can serve requests right now.
+// An error means a required dependency (Postgres) is unreachable.
 type ReadinessChecker interface {
-	Check(ctx context.Context) error
+	Check(ctx context.Context) (Readiness, error)
 }
 
 // ReadyFunc adapts a plain function to ReadinessChecker.
-type ReadyFunc func(ctx context.Context) error
+type ReadyFunc func(ctx context.Context) (Readiness, error)
 
-func (f ReadyFunc) Check(ctx context.Context) error { return f(ctx) }
+func (f ReadyFunc) Check(ctx context.Context) (Readiness, error) { return f(ctx) }
