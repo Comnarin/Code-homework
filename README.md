@@ -18,21 +18,21 @@ cp .env.example .env     # first time only; set POSTGRES_PASSWORD (and ports if 
 docker compose up --build
 ```
 
-| What | URL |
-|---|---|
-| Web UI | http://localhost:3000 (`WEB_HOST_PORT`) |
-| API (direct) | http://localhost:18080 (`API_HOST_PORT`; the container itself uses 8080, and 18080 avoids clashing with other local services) |
-| Postgres | `localhost:55432` (`POSTGRES_HOST_PORT`), user, password and database from your `.env` |
+| What          | URL                                                                                                                             |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Web UI        | http://localhost:3000 (`WEB_HOST_PORT`)                                                                                       |
+| API (direct)  | http://localhost:18080 (`API_HOST_PORT`; the container itself uses 8080, and 18080 avoids clashing with other local services) |
+| Postgres      | `localhost:55432` (`POSTGRES_HOST_PORT`), user, password and database from your `.env`                                    |
 | MinIO console | http://localhost:19001 (`MINIO_CONSOLE_HOST_PORT`), login from `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` in your `.env` |
-| MinIO S3 API | `localhost:19000` (`MINIO_API_HOST_PORT`) |
+| MinIO S3 API  | `localhost:19000` (`MINIO_API_HOST_PORT`)                                                                                   |
 
-Stop with `Ctrl+C`. Postgres, Redis and MinIO keep their data in named Docker volumes (`postgres-data`, `redis-data`, `minio-bitnami-data`), so orders, a held Red slot and uploaded pictures survive a stop and restart, even `docker compose down`. For a clean start run `docker compose down -v`. (If you ran an older version of this compose file, its Postgres data lived in an anonymous volume and is not picked up by `postgres-data`; the database is re-created and re-seeded.)
+Stop with `Ctrl+C`.
 
 ### Demo member cards
 
-| Card | Status |
-|---|---|
-| `MEM0001` | active: gets 10% off |
+| Card        | Status                                            |
+| ----------- | ------------------------------------------------- |
+| `MEM0001` | active: gets 10% off                              |
 | `MEM0002` | suspended: rejected with "Member card not found." |
 
 Cards are case-insensitive and surrounding spaces are ignored.
@@ -52,11 +52,11 @@ To reset the window, set `ENABLE_TEST_TOOLS=true` in `.env` (default is `false`)
 All settings come from environment variables. Each place that reads them has a committed
 `.env.example` to copy; the real `.env` files are git-ignored, so secrets are never committed.
 
-| File | Used by | Key settings |
-|---|---|---|
-| `.env` (from `.env.example`) | `docker compose` | `POSTGRES_PASSWORD` (required), `POSTGRES_USER`, `POSTGRES_DB`, `POSTGRES_HOST_PORT`, `API_HOST_PORT`, `WEB_HOST_PORT`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` (required), `MINIO_BUCKET`, `MINIO_API_HOST_PORT`, `MINIO_CONSOLE_HOST_PORT`, `ENABLE_TEST_TOOLS` |
-| `backend/.env` (from `backend/.env.example`) | the API when run outside Docker (`go run ./cmd/server`) | `DATABASE_URL` (required), `REDIS_ADDR`, `REDIS_DB` (0-15, default 0), `PORT`, `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` / `MINIO_BUCKET` / `MINIO_USE_SSL` (optional; leave `MINIO_ENDPOINT` empty for no pictures), `ENABLE_TEST_TOOLS` |
-| `frontend/.env` (from `frontend/.env.example`) | `npm run dev` / `npm run build` | `API_URL`, `ENABLE_TEST_TOOLS` |
+| File                                               | Used by                                                   | Key settings                                                                                                                                                                                                                                                                               |
+| -------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `.env` (from `.env.example`)                   | `docker compose`                                        | `POSTGRES_PASSWORD` (required), `POSTGRES_USER`, `POSTGRES_DB`, `POSTGRES_HOST_PORT`, `API_HOST_PORT`, `WEB_HOST_PORT`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` (required), `MINIO_BUCKET`, `MINIO_API_HOST_PORT`, `MINIO_CONSOLE_HOST_PORT`, `ENABLE_TEST_TOOLS` |
+| `backend/.env` (from `backend/.env.example`)   | the API when run outside Docker (`go run ./cmd/server`) | `DATABASE_URL` (required), `REDIS_ADDR`, `REDIS_DB` (0-15, default 0), `PORT`, `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` / `MINIO_BUCKET` / `MINIO_USE_SSL` (optional; leave `MINIO_ENDPOINT` empty for no pictures), `ENABLE_TEST_TOOLS`           |
+| `frontend/.env` (from `frontend/.env.example`) | `npm run dev` / `npm run build`                       | `API_URL`, `ENABLE_TEST_TOOLS`                                                                                                                                                                                                                                                         |
 
 Real environment variables always win over a `.env` file, and a missing `.env` is fine when the
 variables are set another way (CI, production). Docker images never contain `.env` files.
@@ -83,12 +83,12 @@ picture, and so does any product whose picture cannot be loaded.
 
 **What the user sees when something is wrong**
 
-| Situation | Result |
-|---|---|
-| Product has no `image_key` | default "no image" picture |
-| File missing in MinIO, or not a PNG/JPEG/WebP/GIF, or over 5 MB | default picture (SVG and HTML files are refused on purpose: they can carry scripts) |
-| MinIO stopped or unreachable | default picture; the menu and prices keep working. The first request waits up to 3 seconds, then the API skips MinIO for 10 seconds so pictures do not each wait; it recovers by itself |
-| The browser cannot reach the API | the page falls back to `/no-image.svg`, served by the web app |
+| Situation                                                       | Result                                                                                                                                                                                  |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Product has no `image_key`                                    | default "no image" picture                                                                                                                                                              |
+| File missing in MinIO, or not a PNG/JPEG/WebP/GIF, or over 5 MB | default picture (SVG and HTML files are refused on purpose: they can carry scripts)                                                                                                     |
+| MinIO stopped or unreachable                                    | default picture; the menu and prices keep working. The first request waits up to 3 seconds, then the API skips MinIO for 10 seconds so pictures do not each wait; it recovers by itself |
+| The browser cannot reach the API                                | the page falls back to `/no-image.svg`, served by the web app                                                                                                                         |
 
 The browser never talks to MinIO: it asks the API (`GET /api/products/{id}/image`), so MinIO stays private
 inside Docker. The default picture is compiled into the API (`internal/adapter/assets/no-image.svg`) and
@@ -107,13 +107,13 @@ flowchart LR
     A -.->|"product pictures<br/>(optional)"| M[("<b>MinIO</b><br/>image storage")]
 ```
 
-| Piece | Job | If it is down |
-|---|---|---|
-| **web** | Shows the menu, cart and price breakdown | Nothing works (it is the UI) |
-| **api** | Prices orders and enforces the rules | UI cannot calculate |
-| **Postgres** | Stores everything and makes the final Red-limit decision | `/readyz` returns 503, API cannot price |
-| **Redis** | Fast first check for the Red slot | **Nothing breaks**: Postgres decides alone, `/readyz` says `degraded` |
-| **MinIO** | Stores product pictures | **Nothing breaks**: the API serves a built-in "no image" picture |
+| Piece              | Job                                                      | If it is down                                                                   |
+| ------------------ | -------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| **web**      | Shows the menu, cart and price breakdown                 | Nothing works (it is the UI)                                                    |
+| **api**      | Prices orders and enforces the rules                     | UI cannot calculate                                                             |
+| **Postgres** | Stores everything and makes the final Red-limit decision | `/readyz` returns 503, API cannot price                                       |
+| **Redis**    | Fast first check for the Red slot                        | **Nothing breaks**: Postgres decides alone, `/readyz` says `degraded` |
+| **MinIO**    | Stores product pictures                                  | **Nothing breaks**: the API serves a built-in "no image" picture          |
 
 The browser only ever talks to **web** (and through it **api**). It never talks to the databases or MinIO.
 
@@ -204,11 +204,11 @@ Browser -> frontend/src/features/calculator   (cart UI, API client)
 
 ## Pricing rules (from the task)
 
-| Rule | Behavior |
-|---|---|
-| Pair discount | Each pair of the **same** colour among Orange, Pink or Green gets 5% off that pair. Pink x4 = two discounted pairs; Green x3 = one discounted pair + one full-price set. |
-| Member discount | A valid member card gives 10% off the total **after** pair discounts. |
-| Red set | If a Red set was ordered in the last hour, further Red orders are rejected for everyone else until the hour is over. |
+| Rule            | Behavior                                                                                                                                                                       |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Pair discount   | Each pair of the **same** colour among Orange, Pink or Green gets 5% off that pair. Pink x4 = two discounted pairs; Green x3 = one discounted pair + one full-price set. |
+| Member discount | A valid member card gives 10% off the total **after** pair discounts.                                                                                                    |
+| Red set         | If a Red set was ordered in the last hour, further Red orders are rejected for everyone else until the hour is over.                                                           |
 
 Money is handled as integer satang (1/100 THB) to avoid float errors; discounts round half-up.
 
@@ -216,15 +216,15 @@ Money is handled as integer satang (1/100 THB) to avoid float errors; discounts 
 
 All errors look like `{"error":{"code":"...","message":"..."}}`.
 
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/healthz` | liveness only: the process is up; it never touches Postgres or Redis |
-| GET | `/readyz` | readiness: Postgres must answer. 200 `{"status":"ok"}`; 200 `{"status":"degraded"}` when only Redis is down (the Postgres guard still enforces the Red rule); 503 `{"status":"unavailable"}` when Postgres is down (no details). Used by the API's Docker healthcheck. MinIO is not checked because pictures fall back to the default |
-| GET | `/api/products` | the menu: `[{ "id", "name", "priceSatang", "imageUrl" }]` |
-| GET | `/api/products/{id}/image` | the product picture, or the built-in "no image" picture when there is none or it cannot be loaded (always 200 for a known product) |
-| GET | `/api/promotions` | the active rules (`[{ code, type, percent, bundleSize?, productIds? }]`); the UI reads badges and percents from here, so rule changes need no frontend change |
-| POST | `/api/calculate` | price an order. Needs `Content-Type: application/json` (otherwise 415). Optional header `X-Client-Key` (max 128 characters) identifies the caller for the Red rule |
-| POST | `/api/test/reset-limits` | test aid, only when `ENABLE_TEST_TOOLS=true`: frees the Red set so the one-per-hour rule can be retried (the UI shows a "Reset Red set limit" button when the web container has the same flag) |
+| Method | Path                         | Purpose                                                                                                                                                                                                                                                                                                                                     |
+| ------ | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/healthz`                 | liveness only: the process is up; it never touches Postgres or Redis                                                                                                                                                                                                                                                                        |
+| GET    | `/readyz`                  | readiness: Postgres must answer. 200 `{"status":"ok"}`; 200 `{"status":"degraded"}` when only Redis is down (the Postgres guard still enforces the Red rule); 503 `{"status":"unavailable"}` when Postgres is down (no details). Used by the API's Docker healthcheck. MinIO is not checked because pictures fall back to the default |
+| GET    | `/api/products`            | the menu: `[{ "id", "name", "priceSatang", "imageUrl" }]`                                                                                                                                                                                                                                                                                 |
+| GET    | `/api/products/{id}/image` | the product picture, or the built-in "no image" picture when there is none or it cannot be loaded (always 200 for a known product)                                                                                                                                                                                                          |
+| GET    | `/api/promotions`          | the active rules (`[{ code, type, percent, bundleSize?, productIds? }]`); the UI reads badges and percents from here, so rule changes need no frontend change                                                                                                                                                                             |
+| POST   | `/api/calculate`           | price an order. Needs `Content-Type: application/json` (otherwise 415). Optional header `X-Client-Key` (max 128 characters) identifies the caller for the Red rule                                                                                                                                                                      |
+| POST   | `/api/test/reset-limits`   | test aid, only when `ENABLE_TEST_TOOLS=true`: frees the Red set so the one-per-hour rule can be retried (the UI shows a "Reset Red set limit" button when the web container has the same flag)                                                                                                                                            |
 
 Request:
 
@@ -244,14 +244,30 @@ Response (amounts in satang):
 }
 ```
 
-| Status | Code | When |
-|---|---|---|
-| 400 | `INVALID_REQUEST` | empty order, unknown product, quantity not 1-1000, malformed JSON, oversized `X-Client-Key`. The message is always the same generic text; the detail is logged, not returned |
-| 400 | `INVALID_MEMBER_CARD` | card not found or suspended |
-| 409 | `LIMITED_PRODUCT_UNAVAILABLE` | Red was already ordered within the last hour by someone else (a different client key) |
-| 415 | `UNSUPPORTED_MEDIA_TYPE` | `POST /api/calculate` without a JSON `Content-Type` |
-| 500 | `INTERNAL` | unexpected failure (details are logged, never returned) |
+| Status | Code                            | When                                                                                                                                                                           |
+| ------ | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 400    | `INVALID_REQUEST`             | empty order, unknown product, quantity not 1-1000, malformed JSON, oversized `X-Client-Key`. The message is always the same generic text; the detail is logged, not returned |
+| 400    | `INVALID_MEMBER_CARD`         | card not found or suspended                                                                                                                                                    |
+| 409    | `LIMITED_PRODUCT_UNAVAILABLE` | Red was already ordered within the last hour by someone else (a different client key)                                                                                          |
+| 415    | `UNSUPPORTED_MEDIA_TYPE`      | `POST /api/calculate` without a JSON `Content-Type`                                                                                                                        |
+| 500    | `INTERNAL`                    | unexpected failure (details are logged, never returned)                                                                                                                        |
 
+## Load testing
+
+k6 scenarios live in `loadtest/`. They run against a separate compose project (`foodstore-load`) with its own database, Redis DB and host ports (`loadtest/loadtest.env`), so your development data is never touched. Only Docker is needed; k6 runs in a container.
+
+```bash
+./loadtest/run.sh smoke.js            # 2 VUs, 30 s
+./loadtest/run.sh load.js             # 50 rps, 5 min
+./loadtest/run.sh stress.js           # 50 -> 400 rps, 10 min, report only
+./loadtest/run.sh spike.js            # 10 -> 300 rps in 10 s
+./loadtest/run.sh soak.js             # 30 rps, 30 min, manual only
+./loadtest/run.sh red-contention.js   # 100 buyers, exactly one winner (N=200 ./loadtest/run.sh ... to change)
+./loadtest/redis-down.sh              # Red rule through a Redis outage and recovery
+./loadtest/run.sh down                # stop the load stack and delete its data
+```
+
+CI runs the smoke scenario, `red-contention.js` and `redis-down.sh`. Measured results and how to read them: [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 ## Run the tests
 
@@ -309,7 +325,8 @@ backend/                 Go, Clean Architecture
 frontend/                Next.js 16 App Router, TypeScript
   src/app/               page (streamed menu), error boundary
   src/features/calculator/  API client, reducer, hook, components
-docs/                    design spec, implementation plan, interview notes
+docs/                    design spec, implementation plan, performance results
+loadtest/                k6 scenarios and scripts (isolated compose project)
 .github/workflows/       CI: gofmt, vet, race tests with Postgres and Redis, frontend checks, Docker builds
 ```
 

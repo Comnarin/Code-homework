@@ -8,3 +8,4 @@ backend/bin/
 backend/coverage.out
 PRODUCT.md
 docs/INTERVIEW.md
+loadtest/out/
