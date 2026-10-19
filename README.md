@@ -163,7 +163,7 @@ sequenceDiagram
         alt held by someone else
             API-->>B: 409 LIMITED_PRODUCT_UNAVAILABLE
         else Redis down or breaker open
-            Note over API,RD: skip Redis, Postgres decides in step 5
+            API->>API: skip Redis and let Postgres decide in step 5
         end
     end
     API->>PG: 5. save the order (same transaction re-checks the Red limit)
@@ -178,11 +178,19 @@ sequenceDiagram
 ### 4. When Redis fails
 
 ```mermaid
-flowchart LR
-    R1["Redis answers"] --> OK["fast accept / reject"] --> S["Postgres still re-checks on save"]
-    R2["Redis times out (200 ms)<br/>or refuses"] --> BR["breaker opens for 5 s:<br/>later requests skip Redis instantly"] --> S
-    S --> W["one Red winner per hour,<br/>even with Redis down"]
+flowchart TD
+    A[Red order arrives] --> B{Is Redis reachable?}
+    B -->|yes| C[Redis answers fast]
+    B -->|no| D[Breaker opens for 5 seconds]
+    D --> E[Later requests skip Redis at once]
+    C --> F[Postgres checks again on save]
+    E --> F
+    F --> G[One Red winner per hour]
 ```
+
+In words: Redis only makes rejections faster. If it answers, good. If it times out (200 ms) or refuses the
+connection, the request skips it and Postgres makes the decision, so there is still exactly one Red winner
+per hour.
 
 ### 5. Where the code lives
 
