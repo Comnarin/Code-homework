@@ -3,7 +3,9 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
+	"strconv"
 
 	"github.com/joho/godotenv"
 )
@@ -12,6 +14,8 @@ type Config struct {
 	Port        string
 	DatabaseURL string
 	RedisAddr   string
+	// RedisDB is the Redis logical database (0-15). Load tests use a separate one.
+	RedisDB int
 	// EnableTestTools exposes POST /api/test/reset-limits. Off by default.
 	EnableTestTools bool
 	// ObjectStorage holds product pictures. Optional: without an endpoint the
@@ -42,6 +46,13 @@ func Load(getenv func(string) string) (Config, error) {
 			Bucket:    orDefault(getenv("MINIO_BUCKET"), "product-images"),
 			UseSSL:    getenv("MINIO_USE_SSL") == "true",
 		},
+	}
+	if raw := getenv("REDIS_DB"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 || n > 15 {
+			return Config{}, fmt.Errorf("REDIS_DB must be a number from 0 to 15, got %q", raw)
+		}
+		c.RedisDB = n
 	}
 	if c.DatabaseURL == "" {
 		return Config{}, errors.New("DATABASE_URL is required")

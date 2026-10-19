@@ -179,3 +179,79 @@ func TestSlotLimiter_ClearFreesTheSlotWhoeverHoldsIt(t *testing.T) {
 		t.Fatal("clear should delete the claim")
 	}
 }
+
+func newBreakerLimiter(t *testing.T, now *time.Time) (*SlotLimiter, *miniredis.Miniredis) {
+	t.Helper()
+	mr := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr(), MaxRetries: -1, DialTimeout: 100 * time.Millisecond})
+	t.Cleanup(func() { _ = client.Close() })
+	l := NewSlotLimiter(client, WithCooldown(5*time.Second), WithOpTimeout(200*time.Millisecond), WithClock(func() time.Time { return *now }))
+	return l, mr
+}
+
+func TestSlotLimiter_BreakerOpensAfterConnectionFailureAndRecovers(t *testing.T) {
+	now := time.Now()
+	l, mr := newBreakerLimiter(t, &now)
+	ctx := context.Background()
+	if _, err := l.Claim(ctx, "red", "a", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	mr.Close()
+
+	_, err := l.Claim(ctx, "red", "a", time.Hour)
+	if err == nil || errors.Is(err, domain.ErrSlotHeld) || errors.Is(err, ErrUnavailable) {
+		t.Fatalf("first call after outage err = %v, want a raw connection error", err)
+	}
+	if l.Available() {
+		t.Fatal("breaker should be open")
+	}
+	start := time.Now()
+	_, err = l.Claim(ctx, "red", "a", time.Hour)
+	if !errors.Is(err, ErrUnavailable) || time.Since(start) > 5*time.Millisecond {
+		t.Fatalf("second call err=%v took %v, want instant ErrUnavailable", err, time.Since(start))
+	}
+	if err := l.Release(ctx, "red", "a"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("release err = %v", err)
+	}
+	if err := l.Clear(ctx, "red"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("clear err = %v", err)
+	}
+
+	now = now.Add(6 * time.Second)
+	if err := mr.Restart(); err != nil {
+		t.Fatal(err)
+	}
+	// miniredis keeps its data across Restart, so "a" still holds the claim.
+	acquired, err := l.Claim(ctx, "red", "a", time.Hour)
+	if err != nil || acquired {
+		t.Fatalf("after cooldown + restart: acquired=%v err=%v, want the existing claim reused", acquired, err)
+	}
+	if !l.Available() {
+		t.Fatal("breaker should be closed again")
+	}
+}
+
+func TestSlotLimiter_ServerErrorsDoNotOpenTheBreaker(t *testing.T) {
+	now := time.Now()
+	l, mr := newBreakerLimiter(t, &now)
+	mr.SetError("boom")
+	if _, err := l.Claim(context.Background(), "red", "a", time.Hour); err == nil {
+		t.Fatal("want the server error")
+	}
+	if !l.Available() {
+		t.Fatal("a Redis reply is not an outage; breaker must stay closed")
+	}
+}
+
+func TestSlotLimiter_CancelledCallerDoesNotOpenTheBreaker(t *testing.T) {
+	now := time.Now()
+	l, _ := newBreakerLimiter(t, &now)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := l.Claim(ctx, "red", "a", time.Hour); err == nil {
+		t.Fatal("want an error for a cancelled context")
+	}
+	if !l.Available() {
+		t.Fatal("caller cancellation must not open the breaker")
+	}
+}

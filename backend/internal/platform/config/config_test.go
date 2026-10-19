@@ -13,6 +13,9 @@ func TestLoad_AppliesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if c.RedisDB != 0 {
+		t.Fatalf("redis-db default wrong: %+v", c)
+	}
 	if c.Port != "8080" || c.RedisAddr != "localhost:6379" || c.DatabaseURL != "postgres://x" {
 		t.Fatalf("got %+v", c)
 	}
@@ -21,9 +24,13 @@ func TestLoad_AppliesDefaults(t *testing.T) {
 func TestLoad_ReadsOverrides(t *testing.T) {
 	c, err := Load(env(map[string]string{
 		"DATABASE_URL": "postgres://x", "PORT": "9000", "REDIS_ADDR": "redis:6379",
+		"REDIS_DB": "1",
 	}))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if c.RedisDB != 1 {
+		t.Fatalf("got %+v", c)
 	}
 	if c.Port != "9000" || c.RedisAddr != "redis:6379" {
 		t.Fatalf("got %+v", c)
@@ -132,5 +139,13 @@ func TestLoad_ObjectStorageNeedsCredentialsWhenEnabled(t *testing.T) {
 	_, err := Load(env(map[string]string{"DATABASE_URL": "postgres://x", "MINIO_ENDPOINT": "minio:9000"}))
 	if err == nil {
 		t.Fatal("an endpoint without MINIO_ACCESS_KEY / MINIO_SECRET_KEY should be rejected at start-up")
+	}
+}
+
+func TestLoad_RejectsABadRedisDB(t *testing.T) {
+	for _, v := range []string{"-1", "16", "abc"} {
+		if _, err := Load(env(map[string]string{"DATABASE_URL": "postgres://x", "REDIS_DB": v})); err == nil {
+			t.Fatalf("REDIS_DB=%q should be rejected", v)
+		}
 	}
 }

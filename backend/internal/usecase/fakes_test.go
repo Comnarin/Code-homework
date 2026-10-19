@@ -50,16 +50,53 @@ func (f *fakeLimits) ActiveLimits(context.Context) (map[domain.ProductID]time.Du
 	return f.limits, nil
 }
 
+// fakeOrders optionally copies the Postgres guard: when guarded is set, a
+// guarded product already held by another holder makes Save fail with
+// *domain.SlotHeldError, and a free one is recorded for the saving holder.
 type fakeOrders struct {
-	saved []domain.Order
-	err   error
+	saved   []domain.Order
+	err     error
+	guarded []domain.ProductID
+	guard   map[domain.ProductID]string
 }
 
 func (f *fakeOrders) Save(_ context.Context, o domain.Order) error {
 	if f.err != nil {
 		return f.err
 	}
+	var claims []domain.ProductID
+	for _, c := range o.Carts {
+		for _, g := range f.guarded {
+			if g != c.Product.ID {
+				continue
+			}
+			if cur, ok := f.guard[g]; ok && cur != o.Holder() {
+				return &domain.SlotHeldError{ProductID: g, ProductName: c.Product.Name}
+			} else if !ok {
+				claims = append(claims, g)
+			}
+		}
+	}
+	if f.guard == nil {
+		f.guard = map[domain.ProductID]string{}
+	}
+	for _, g := range claims {
+		f.guard[g] = o.Holder()
+	}
 	f.saved = append(f.saved, o)
+	return nil
+}
+
+type fakeWindows struct {
+	cleared int
+	err     error
+}
+
+func (f *fakeWindows) ClearLimitWindows(context.Context) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.cleared++
 	return nil
 }
 

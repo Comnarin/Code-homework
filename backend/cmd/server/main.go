@@ -62,22 +62,34 @@ func run() error {
 	}
 	defer db.Close(gdb) //nolint:errcheck // closing at shutdown
 
-	rdb := goredis.NewClient(&goredis.Options{Addr: cfg.RedisAddr})
+	// Redis is a fast gate in front of the Postgres guard, not a hard
+	// dependency: short timeouts, no retries, and a start-up ping failure is
+	// only a warning.
+	rdb := goredis.NewClient(&goredis.Options{
+		Addr:         cfg.RedisAddr,
+		DB:           cfg.RedisDB,
+		DialTimeout:  250 * time.Millisecond,
+		ReadTimeout:  200 * time.Millisecond,
+		WriteTimeout: 200 * time.Millisecond,
+		PoolTimeout:  300 * time.Millisecond,
+		MaxRetries:   -1, // go-redis treats 0 as "default 3"; -1 disables retries
+	})
 	defer rdb.Close()
 	if err := rdb.Ping(ctx).Err(); err != nil {
-		return err
+		slog.Warn("Redis is not reachable; Red set limit will use the Postgres guard until Redis is reachable", "addr", cfg.RedisAddr, "err", err)
 	}
 
 	products := postgres.NewProductRepository(gdb)
 	rules := postgres.NewRuleRepository(gdb)
 	limits := postgres.NewLimitRepository(gdb)
+	orders := postgres.NewOrderRepository(gdb)
 	limiter := redisadapter.NewSlotLimiter(rdb)
 	calculate := usecase.NewCalculateOrder(usecase.CalculateOrderDeps{
 		Products: products,
 		Members:  postgres.NewMemberRepository(gdb),
 		Rules:    rules,
 		Limits:   limits,
-		Orders:   postgres.NewOrderRepository(gdb),
+		Orders:   orders,
 		Limiter:  limiter,
 		Clock:    systemClock{},
 		IDs:      uuidGenerator{},
@@ -92,7 +104,7 @@ func run() error {
 	}
 	if cfg.EnableTestTools {
 		slog.Warn("test tools enabled: POST /api/test/reset-limits is exposed")
-		deps.ResetLimits = usecase.NewResetLimits(limits, limiter)
+		deps.ResetLimits = usecase.NewResetLimits(limits, limiter, orders)
 	}
 	app := httpapi.NewApp(deps)
 
@@ -104,23 +116,28 @@ func run() error {
 	return app.Listen(":" + cfg.Port)
 }
 
-// readiness backs GET /readyz: Postgres and Redis must both answer a ping.
-// MinIO is left out on purpose, because pictures fall back to the default.
+// readiness backs GET /readyz. Postgres must answer a ping or the service is
+// not ready. Redis is a soft dependency: when it is down the Postgres guard
+// still enforces the Red set limit, so the service reports "degraded" and
+// stays in rotation. MinIO is left out on purpose, because pictures fall back
+// to the default.
 func readiness(gdb *gorm.DB, rdb *goredis.Client) httpapi.ReadyFunc {
-	return func(ctx context.Context) error {
+	return func(ctx context.Context) (httpapi.Readiness, error) {
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 		sqlDB, err := gdb.DB()
 		if err != nil {
-			return err
+			return httpapi.Readiness{}, err
 		}
 		if err := sqlDB.PingContext(ctx); err != nil {
-			return fmt.Errorf("postgres: %w", err)
+			return httpapi.Readiness{}, fmt.Errorf("postgres: %w", err)
 		}
+		var r httpapi.Readiness
 		if err := rdb.Ping(ctx).Err(); err != nil {
-			return fmt.Errorf("redis: %w", err)
+			slog.Warn("redis unreachable; running degraded on the Postgres guard", "err", err)
+			r.Degraded = append(r.Degraded, "redis")
 		}
-		return nil
+		return r, nil
 	}
 }
 

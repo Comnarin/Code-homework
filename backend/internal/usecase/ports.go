@@ -30,7 +30,18 @@ type LimitRepository interface {
 }
 
 type OrderRepository interface {
+	// Save stores the order and atomically enforces the active product limits:
+	// if another holder (domain.Order.Holder) already opened a limited
+	// product's window, nothing is stored and the error is a
+	// *domain.SlotHeldError. This is the authoritative check; the SlotLimiter
+	// is only a fast admission gate in front of it.
 	Save(ctx context.Context, o domain.Order) error
+}
+
+// LimitWindowClearer forgets every open limit window in the system of record
+// (test aid; see ResetLimits).
+type LimitWindowClearer interface {
+	ClearLimitWindows(ctx context.Context) error
 }
 
 // SlotLimiter keeps a limited product from being ordered again within its
