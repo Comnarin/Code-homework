@@ -187,6 +187,92 @@ npm run typecheck
 npm run lint
 ```
 
+## Architecture at a glance
+
+### 1. The big picture (what runs in Docker)
+
+```mermaid
+flowchart LR
+    U([Customer's browser]) -->|":3000"| W["<b>web</b><br/>Next.js UI"]
+    W -->|"/api/* proxied"| A["<b>api</b><br/>Go + Fiber"]
+    A -->|"products, members,<br/>rules, orders"| P[("<b>Postgres</b><br/>source of truth")]
+    A -->|"Red-set claim<br/>(1 hour)"| R[("<b>Redis</b><br/>fast lock")]
+    A -.->|"product pictures<br/>(optional)"| M[("<b>MinIO</b><br/>image storage")]
+```
+
+| Piece | Job | If it is down |
+|---|---|---|
+| **web** | Shows the menu, cart and price breakdown | Nothing works (it is the UI) |
+| **api** | Prices orders and enforces the rules | UI cannot calculate |
+| **Postgres** | Stores products, members, discount rules, orders | `/readyz` fails, API cannot price |
+| **Redis** | Remembers "Red was ordered in the last hour" | `/readyz` fails, orders with Red fail |
+| **MinIO** | Stores product pictures | **Nothing breaks**: the API serves a built-in "no image" picture |
+
+The browser only ever talks to **web** (and through it **api**). It never talks to the databases or MinIO.
+
+### 2. Inside the API (Clean Architecture)
+
+```mermaid
+flowchart TB
+    subgraph adapter["adapter: talks to the outside world"]
+        H["http (Fiber)<br/>routes, JSON, error codes"]
+        PG["postgres (GORM)"]
+        RD["redis (Lua claim / release)"]
+        MN["minio + assets"]
+    end
+    subgraph usecase["usecase: one class per user action"]
+        UC["CalculateOrder<br/>Products · Promotions<br/>GetProductImage · ResetLimits"]
+        PORTS{{"ports.go<br/>interfaces the use cases need"}}
+    end
+    subgraph domain["domain: pure business rules, no frameworks"]
+        D["Money · Product · Order<br/>pricing.go · rules.go"]
+    end
+    H --> UC
+    UC --> D
+    UC --> PORTS
+    PG -. implements .-> PORTS
+    RD -. implements .-> PORTS
+    MN -. implements .-> PORTS
+```
+
+**Rule of thumb:** arrows point inward. `adapter -> usecase -> domain`. The domain knows nothing about HTTP,
+Postgres or Redis, so the pricing rules can be tested with plain Go tests, and a database can be swapped by
+writing a new adapter.
+
+### 3. What happens when you press "Calculate"
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant API as API (CalculateOrder)
+    participant PG as Postgres
+    participant RD as Redis
+    B->>API: POST /api/calculate (items, member card, X-Client-Key)
+    API->>API: 1. validate quantities, merge repeated products
+    API->>PG: 2. load products, check member card, load active rules
+    API->>API: 3. price it (pair discount 5%, then member discount 10%)
+    API->>RD: 4. claim the Red slot for 1 hour (only if cart has Red)
+    alt Red already held by someone else
+        API-->>B: 409 LIMITED_PRODUCT_UNAVAILABLE
+    else claim OK
+        API->>PG: 5. save the order
+        alt save failed
+            API->>RD: release the Red claim so the customer can retry
+        end
+        API-->>B: 200 quote (amounts in satang)
+    end
+```
+
+### 4. Where the code lives
+
+```
+Browser -> frontend/src/features/calculator   (cart UI, API client)
+        -> backend/internal/adapter/http      (route + JSON)
+        -> backend/internal/usecase           (CalculateOrder: the workflow)
+        -> backend/internal/domain            (pricing + discount rules)
+        -> adapter/postgres | adapter/redis | adapter/minio   (storage)
+```
+
 ## Project structure
 
 ```
