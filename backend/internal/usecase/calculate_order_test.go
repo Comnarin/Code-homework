@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -206,18 +207,117 @@ func TestCalculateOrder_RejectsUnknownOrSuspendedCardWithoutClaimingRed(t *testi
 	}
 }
 
-func TestCalculateOrder_LimiterOutageFailsTheRequestAndSavesNothing(t *testing.T) {
+func observed(f *fixture) *recordingObserver {
+	obs := &recordingObserver{}
+	f.uc = NewCalculateOrder(CalculateOrderDeps{
+		Products: f.products, Members: f.members, Rules: f.rules, Limits: f.limits,
+		Orders: f.orders, Limiter: f.limiter, Clock: fixedClock{testNow}, IDs: &seqIDs{}, Observer: obs,
+	})
+	return obs
+}
+
+func TestCalculateOrder_LimiterOutageFallsBackToThePostgresGuard(t *testing.T) {
 	f := newFixture(t)
-	boom := errors.New("redis: connection refused")
-	f.limiter.err = boom
+	f.limiter.err = errors.New("redis: connection refused")
+	f.orders.guarded = []domain.ProductID{"red"}
+	obs := observed(f)
 
-	_, err := f.uc.Execute(context.Background(), CalculateInput{Items: items("red", 1)})
+	q, err := f.uc.Execute(context.Background(), CalculateInput{ClientKey: "a", Items: items("red", 1)})
+	if err != nil || q.FinalTotal == 0 {
+		t.Fatalf("quote=%+v err=%v, want the order to succeed through the DB guard", q, err)
+	}
+	if len(f.orders.saved) != 1 || f.orders.guard["red"] != "a" {
+		t.Fatal("the order must be saved with the DB guard holding red")
+	}
+	if len(obs.fallbacks) != 1 || len(f.limiter.released) != 0 {
+		t.Fatalf("fallbacks=%v released=%v", obs.fallbacks, f.limiter.released)
+	}
+}
 
-	if !errors.Is(err, boom) || errors.Is(err, domain.ErrSlotHeld) {
-		t.Fatalf("err = %v, want the raw limiter error (not ErrSlotHeld)", err)
+func TestCalculateOrder_LimiterOutageWithHeldGuardIsASlotHeldErrorNotInternal(t *testing.T) {
+	f := newFixture(t)
+	f.limiter.err = errors.New("redis: connection refused")
+	f.orders.guarded = []domain.ProductID{"red"}
+	f.orders.guard = map[domain.ProductID]string{"red": "winner"}
+
+	_, err := f.uc.Execute(context.Background(), CalculateInput{ClientKey: "late", Items: items("red", 1)})
+	var held *domain.SlotHeldError
+	if !errors.As(err, &held) || held.ProductName != "Red set" {
+		t.Fatalf("err = %v, want *SlotHeldError", err)
 	}
 	if len(f.orders.saved) != 0 {
-		t.Fatal("no order may be saved when the limiter fails")
+		t.Fatal("nothing may be saved")
+	}
+}
+
+func TestCalculateOrder_RedisAdmitsButGuardHoldsReleasesTheRedisClaim(t *testing.T) {
+	f := newFixture(t) // Redis lost its data: it admits a late holder
+	f.orders.guarded = []domain.ProductID{"red"}
+	f.orders.guard = map[domain.ProductID]string{"red": "winner"}
+	obs := observed(f)
+
+	_, err := f.uc.Execute(context.Background(), CalculateInput{ClientKey: "late", Items: items("red", 1)})
+	var held *domain.SlotHeldError
+	if !errors.As(err, &held) {
+		t.Fatalf("err = %v, want *SlotHeldError", err)
+	}
+	if len(f.limiter.held) != 0 {
+		t.Fatalf("the Redis claim must be released, held = %v", f.limiter.held)
+	}
+	want := []string{"red/redis/claimed", "red/redis/released", "red/db/rejected"}
+	if fmt.Sprint(obs.claims) != fmt.Sprint(want) {
+		t.Fatalf("claims = %v, want %v", obs.claims, want)
+	}
+}
+
+func TestCalculateOrder_AfterOneLimiterErrorTheLimiterIsNotCalledAgain(t *testing.T) {
+	f := newFixture(t)
+	f.limits.limits = map[domain.ProductID]time.Duration{"red": time.Hour, "pink": time.Hour}
+	f.limiter.err = errors.New("redis down")
+	calls := &countingLimiter{fakeLimiter: f.limiter}
+	f.uc = NewCalculateOrder(CalculateOrderDeps{
+		Products: f.products, Members: f.members, Rules: f.rules, Limits: f.limits,
+		Orders: f.orders, Limiter: calls, Clock: fixedClock{testNow}, IDs: &seqIDs{},
+	})
+
+	if _, err := f.uc.Execute(context.Background(), CalculateInput{Items: items("red", 1, "pink", 1)}); err != nil {
+		t.Fatal(err)
+	}
+	if calls.claimCalls != 1 {
+		t.Fatalf("limiter Claim called %d times, want 1", calls.claimCalls)
+	}
+}
+
+type countingLimiter struct {
+	*fakeLimiter
+	claimCalls int
+}
+
+func (c *countingLimiter) Claim(ctx context.Context, p domain.ProductID, h string, ttl time.Duration) (bool, error) {
+	c.claimCalls++
+	return c.fakeLimiter.Claim(ctx, p, h, ttl)
+}
+
+func TestCalculateOrder_ObserverSeesTheHappyPath(t *testing.T) {
+	f := newFixture(t)
+	obs := observed(f)
+	ctx := context.Background()
+
+	if _, err := f.uc.Execute(ctx, CalculateInput{MemberCard: "MEM0001", ClientKey: "a", Items: items("red", 1)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.uc.Execute(ctx, CalculateInput{ClientKey: "a", Items: items("red", 1)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.uc.Execute(ctx, CalculateInput{ClientKey: "b", Items: items("red", 1)}); err == nil {
+		t.Fatal("want held")
+	}
+	if fmt.Sprint(obs.orders) != "[true false]" {
+		t.Fatalf("orders = %v", obs.orders)
+	}
+	want := []string{"red/redis/claimed", "red/redis/reused", "red/redis/rejected"}
+	if fmt.Sprint(obs.claims) != fmt.Sprint(want) {
+		t.Fatalf("claims = %v, want %v", obs.claims, want)
 	}
 }
 

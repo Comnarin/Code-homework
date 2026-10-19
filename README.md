@@ -3,7 +3,7 @@
 A price calculator for a food store with 7 menu items. A **Go (Fiber) API** prices orders with
 pair and member discounts and enforces the "one Red order per hour" limit. A
 **Next.js UI** lets a customer pick quantities, enter a member card and see the breakdown.
-Postgres (via GORM) holds products, members, discount rules and orders; Redis holds the Red-set claim;
+Postgres (via GORM) holds products, members, discount rules and orders and is the authority on the Red-set limit; Redis is a fast gate in front of it;
 MinIO holds the product pictures.
 
 ## Prerequisites
@@ -45,7 +45,7 @@ Cards are case-insensitive and surrounding spaces are ignored.
 
 If saving the order fails, the Red claim made by that request is released, so the customer can retry.
 
-To reset the window, set `ENABLE_TEST_TOOLS=true` in `.env` (default is `false`) and use the "Reset Red set limit" button, or run `docker compose exec redis redis-cli FLUSHALL`.
+To reset the window, set `ENABLE_TEST_TOOLS=true` in `.env` (default is `false`) and use the "Reset Red set limit" button. Flushing Redis alone no longer resets the window, because Postgres is authoritative.
 
 ## Configuration (`.env`)
 
@@ -54,8 +54,8 @@ All settings come from environment variables. Each place that reads them has a c
 
 | File | Used by | Key settings |
 |---|---|---|
-| `.env` (from `.env.example`) | `docker compose` | `POSTGRES_PASSWORD` (required), `POSTGRES_USER`, `POSTGRES_DB`, `POSTGRES_HOST_PORT`, `API_HOST_PORT`, `WEB_HOST_PORT`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` (required), `MINIO_BUCKET`, `MINIO_API_HOST_PORT`, `MINIO_CONSOLE_HOST_PORT`, `ENABLE_TEST_TOOLS` |
-| `backend/.env` (from `backend/.env.example`) | the API when run outside Docker (`go run ./cmd/server`) | `DATABASE_URL` (required), `REDIS_ADDR`, `PORT`, `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` / `MINIO_BUCKET` / `MINIO_USE_SSL` (optional; leave `MINIO_ENDPOINT` empty for no pictures), `ENABLE_TEST_TOOLS` |
+| `.env` (from `.env.example`) | `docker compose` | `POSTGRES_PASSWORD` (required), `POSTGRES_USER`, `POSTGRES_DB`, `POSTGRES_HOST_PORT`, `API_HOST_PORT`, `WEB_HOST_PORT`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` (required), `MINIO_BUCKET`, `MINIO_API_HOST_PORT`, `MINIO_CONSOLE_HOST_PORT`, `ENABLE_TEST_TOOLS`, optional `REDIS_DB`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `PROMETHEUS_HOST_PORT`, `GRAFANA_HOST_PORT`, `JAEGER_HOST_PORT` |
+| `backend/.env` (from `backend/.env.example`) | the API when run outside Docker (`go run ./cmd/server`) | `DATABASE_URL` (required), `REDIS_ADDR`, `REDIS_DB` (0-15, default 0), `PORT`, `METRICS_ADDR` (e.g. `:9091`; empty = no metrics listener), `OTEL_EXPORTER_OTLP_ENDPOINT` (empty = tracing off), `OTEL_SERVICE_NAME`, `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` / `MINIO_BUCKET` / `MINIO_USE_SSL` (optional; leave `MINIO_ENDPOINT` empty for no pictures), `ENABLE_TEST_TOOLS` |
 | `frontend/.env` (from `frontend/.env.example`) | `npm run dev` / `npm run build` | `API_URL`, `ENABLE_TEST_TOOLS` |
 
 Real environment variables always win over a `.env` file, and a missing `.env` is fine when the
@@ -100,7 +100,7 @@ copied to `frontend/public/no-image.svg`; if you change one, change both.
 |---|---|
 | Pair discount | Each pair of the **same** colour among Orange, Pink or Green gets 5% off that pair. Pink x4 = two discounted pairs; Green x3 = one discounted pair + one full-price set. |
 | Member discount | A valid member card gives 10% off the total **after** pair discounts. |
-| Red set | If a Red set was ordered in the last hour, further Red orders are rejected for everyone until the hour is over. |
+| Red set | If a Red set was ordered in the last hour, further Red orders are rejected for everyone else until the hour is over. |
 
 Money is handled as integer satang (1/100 THB) to avoid float errors; discounts round half-up.
 
@@ -111,7 +111,7 @@ All errors look like `{"error":{"code":"...","message":"..."}}`.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/healthz` | liveness only: the process is up; it never touches Postgres or Redis |
-| GET | `/readyz` | readiness: pings Postgres and Redis, 200 `{"status":"ok"}` or 503 `{"status":"unavailable"}` (no details); used by the API's Docker healthcheck. MinIO is not checked because pictures fall back to the default |
+| GET | `/readyz` | readiness: Postgres must answer. 200 `{"status":"ok"}`; 200 `{"status":"degraded"}` when only Redis is down (the Postgres guard still enforces the Red rule); 503 `{"status":"unavailable"}` when Postgres is down (no details). Used by the API's Docker healthcheck. MinIO is not checked because pictures fall back to the default |
 | GET | `/api/products` | the menu: `[{ "id", "name", "priceSatang", "imageUrl" }]` |
 | GET | `/api/products/{id}/image` | the product picture, or the built-in "no image" picture when there is none or it cannot be loaded (always 200 for a known product) |
 | GET | `/api/promotions` | the active rules (`[{ code, type, percent, bundleSize?, productIds? }]`); the UI reads badges and percents from here, so rule changes need no frontend change |
@@ -145,6 +145,50 @@ Response (amounts in satang):
 | 500 | `INTERNAL` | unexpected failure (details are logged, never returned) |
 
 
+## Red-limit consistency model
+
+- **Postgres is authoritative.** The order save runs the Red check inside its own transaction: it locks the active `product_limits` row, looks up who opened the current window (`order_items.started_limit_window`, holder = `orders.client_key` or the order id) and rejects a different holder with 409. A repeat order by the same holder is allowed and never extends the window.
+- **Redis is a fast admission gate** in front of it. It answers most conflicts without a database transaction. If the gate admits a request that Postgres then rejects (Redis lost its data, or was down when the winner ordered), the Redis claim is released.
+- **A circuit breaker** (200 ms command timeout, 5 s cooldown) stops requests from waiting on a dead Redis. While Redis is unavailable the request skips it and Postgres alone decides, so there is no outage window in which two buyers can both win.
+- **`/readyz`** reports `degraded` (HTTP 200) when only Redis is down, so the API stays in rotation.
+- Trade-offs: the app clock and Redis TTL can differ slightly, so after an outage Redis may block the same holder a little longer than Postgres would; a leftover Redis key with no matching order over-blocks until its TTL expires (it never double-sells); under the database path concurrent Red orders are serialized by the row lock; `OrderRepository.Save` now enforces limits (documented on the port).
+
+## Observability
+
+Metrics and traces are optional and cost nothing when off. `docker compose up` is unchanged.
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 docker compose --profile observability up -d
+```
+
+| What | URL |
+|---|---|
+| Grafana (dashboard "Food store API", anonymous admin, demo only) | http://localhost:3001 (`GRAFANA_HOST_PORT`) |
+| Prometheus | http://localhost:9090 (`PROMETHEUS_HOST_PORT`) |
+| Jaeger traces | http://localhost:16686 (`JAEGER_HOST_PORT`) |
+
+- The API serves Prometheus metrics on a **separate port** (`METRICS_ADDR=:9091`, set in compose, not published to the host). `/metrics` does not exist on the public API port. Prometheus scrapes `api:9091` every 5 s.
+- Metrics: `http_server_*` (requests, latency, in flight; the `route` label is the route pattern, unknown paths become `unmatched`), `foodstore_*` business counters (orders, promotions, limit claims by source and outcome, Redis fallbacks, picture fallbacks), `redis_*`, `go_sql_*` pool stats, Go runtime and process metrics.
+- Traces: set `OTEL_EXPORTER_OTLP_ENDPOINT` to turn them on. A request becomes a `POST /api/calculate` span with `CalculateOrder`, `claim_limited`, `save_order` and database/Redis child spans. Query arguments (member cards) are never recorded. Logs are JSON and carry `trace_id` and `span_id` inside a request.
+
+## Load testing
+
+k6 scenarios live in `loadtest/`. They run against a separate compose project (`foodstore-load`) with its own database, Redis DB and host ports (`loadtest/loadtest.env`), so your development data is never touched.
+
+```bash
+./loadtest/run.sh smoke.js            # 2 VUs, 30 s
+./loadtest/run.sh load.js             # 50 rps, 5 min
+./loadtest/run.sh stress.js           # 50 -> 400 rps, 10 min, report only
+./loadtest/run.sh spike.js            # 10 -> 300 rps in 10 s
+./loadtest/run.sh soak.js             # 30 rps, 30 min, manual only
+./loadtest/run.sh red-contention.js   # 100 buyers, exactly one winner (N=200 ./loadtest/run.sh ... to change)
+./loadtest/redis-down.sh              # Red rule through a Redis outage and recovery
+OBSERVE=1 ./loadtest/run.sh load.js   # also start Grafana/Prometheus/Jaeger (Grafana on :23001)
+./loadtest/run.sh down                # stop the load stack and delete its data
+```
+
+CI runs the smoke scenario, `red-contention.js` and `redis-down.sh`. Results and how to read them: `docs/PERFORMANCE.md`.
+
 ## Run the tests
 
 Backend (unit tests need nothing else):
@@ -158,7 +202,7 @@ go test -race -cover $(go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.Import
 packages that have no tests, `cmd/server`, `platform/db` and `migrations`; the command above lists only
 packages that have tests. CI uses the same list with `-coverprofile`.)
 
-To include the Postgres integration tests, start Postgres and point `DATABASE_URL` at it. The tests never touch the database that URL names: they drop and recreate their own `<name>_test` database on the same server (for example `foodstore_test`), so your data and any experiments in a SQL client are safe:
+To include the Postgres integration tests, start Postgres and point `DATABASE_URL` at it. The tests never touch the database that URL names: they drop and recreate their own `<name>_test` database on the same server (for example `foodstore_test`), so your data and any experiments in a SQL client are safe (each test package uses its own database, such as `foodstore_test`, `foodstore_test_e2e` and `foodstore_test_migr`, because packages run in parallel):
 
 ```bash
 docker compose up -d postgres
@@ -194,8 +238,11 @@ backend/                 Go, Clean Architecture
   cmd/server/            composition root: wires everything together
   internal/domain/       entities, Money, pricing rules (stdlib only)
   internal/usecase/      CalculateOrder, Products, Promotions, GetProductImage, ResetLimits + the ports they need (ports.go)
-  internal/adapter/      http (Fiber) · postgres (GORM) · redis (Lua claim / compare-and-delete release) · minio (pictures) · assets (built-in no-image picture)
-  internal/platform/     config, database connection and migrations
+  internal/adapter/      http (Fiber, plus request metrics and tracing middleware) · postgres (GORM; the order save enforces the Red limit) · redis (Lua claim / release with a circuit breaker) · minio (pictures) · metrics (Prometheus) · assets (built-in no-image picture)
+  internal/platform/     config, database connection and migrations, telemetry (OpenTelemetry), metrics listener
+  internal/e2e/          end-to-end tests of the Red rule with Redis up and down
+loadtest/                k6 scenarios and scripts (isolated compose project)
+observability/           Prometheus and Grafana configuration (compose profile)
   migrations/            SQL schema and seed data
 frontend/                Next.js 16 App Router, TypeScript
   src/app/               page (streamed menu), error boundary

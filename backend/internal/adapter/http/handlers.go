@@ -28,9 +28,15 @@ const maxClientKeyLength = 128
 func (h handlers) health(c fiber.Ctx) error { return c.SendStatus(fiber.StatusOK) }
 
 func (h handlers) readiness(c fiber.Ctx) error {
-	if err := h.ready.Check(c.Context()); err != nil {
-		slog.Error("not ready", "err", err)
+	r, err := h.ready.Check(c.Context())
+	if err != nil {
+		slog.ErrorContext(c.Context(), "not ready", "err", err)
 		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"status": "unavailable"})
+	}
+	if len(r.Degraded) > 0 {
+		// Serving, but an optional dependency is down. The detail is logged by
+		// the checker, never sent to clients.
+		return c.JSON(fiber.Map{"status": "degraded"})
 	}
 	return c.JSON(fiber.Map{"status": "ok"})
 }

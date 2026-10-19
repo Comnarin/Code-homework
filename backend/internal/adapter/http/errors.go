@@ -30,7 +30,7 @@ type errorDetail struct {
 func errorHandler(c fiber.Ctx, err error) error {
 	status, detail := mapError(err)
 	if status == fiber.StatusInternalServerError {
-		slog.Error("request failed", "method", c.Method(), "path", c.Path(), "err", err)
+		slog.ErrorContext(c.Context(), "request failed", "method", c.Method(), "path", c.Path(), "err", err)
 	}
 	return c.Status(status).JSON(errorBody{Error: detail})
 }

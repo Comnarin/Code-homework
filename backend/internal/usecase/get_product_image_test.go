@@ -123,3 +123,17 @@ func TestGetProductImage_LooksUpOneProductInsteadOfLoadingTheCatalog(t *testing.
 		t.Fatalf("List was called %d times; an image request must not load the whole catalog", products.listCalls)
 	}
 }
+
+func TestGetProductImage_ReportsWhereThePictureCameFrom(t *testing.T) {
+	obs := &recordingObserver{}
+	store := &fakeImageStore{images: map[string]domain.Image{"red.png": redPNG}}
+	uc := NewGetProductImage(catalogWithOneImage(), store, fallbackImage).WithObserver(obs)
+	for _, id := range []string{"red", "blue"} {
+		if _, err := uc.Execute(context.Background(), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(obs.images) != 2 || !obs.images[0] || obs.images[1] {
+		t.Fatalf("images = %v, want [true false]", obs.images)
+	}
+}

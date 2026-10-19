@@ -6,3 +6,4 @@ coverage/
 backend/bin/
 .superpowers/
 backend/coverage.out
+loadtest/out/

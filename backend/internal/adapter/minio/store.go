@@ -131,3 +131,7 @@ func (s *Store) noteFailure(callerCtx context.Context, err error) {
 	s.downUntil = time.Now().Add(s.cooldown)
 	s.mu.Unlock()
 }
+
+// Available reports whether the store is believed to be reachable, that is,
+// whether it is not in the cooldown that follows a connection failure.
+func (s *Store) Available() bool { return !s.isDown() }

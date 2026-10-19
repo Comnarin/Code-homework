@@ -29,10 +29,20 @@ type GetProductImage struct {
 	products ProductRepository
 	store    ImageStore // may be nil when object storage is not configured
 	fallback domain.Image
+	observer Observer
+}
+
+// WithObserver reports which pictures came from storage and which were stand-ins.
+func (u *GetProductImage) WithObserver(o Observer) *GetProductImage {
+	if o == nil {
+		o = NopObserver{}
+	}
+	u.observer = o
+	return u
 }
 
 func NewGetProductImage(products ProductRepository, store ImageStore, fallback domain.Image) *GetProductImage {
-	return &GetProductImage{products: products, store: store, fallback: fallback}
+	return &GetProductImage{products: products, store: store, fallback: fallback, observer: NopObserver{}}
 }
 
 func (u *GetProductImage) Execute(ctx context.Context, productID string) (ImageResult, error) {
@@ -49,12 +59,14 @@ func (u *GetProductImage) Execute(ctx context.Context, productID string) (ImageR
 	}
 	img, err := u.store.Get(ctx, product.ImageKey)
 	if err != nil {
-		slog.Warn("product image unavailable, using the default", "product", productID, "key", product.ImageKey, "err", err)
+		slog.WarnContext(ctx, "product image unavailable, using the default", "product", productID, "key", product.ImageKey, "err", err)
 		return u.fallbackResult(), nil
 	}
+	u.observer.ImageServed(true)
 	return ImageResult{Image: img, Source: ImageFromStore}, nil
 }
 
 func (u *GetProductImage) fallbackResult() ImageResult {
+	u.observer.ImageServed(false)
 	return ImageResult{Image: u.fallback, Source: ImageFallback}
 }

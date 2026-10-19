@@ -8,8 +8,29 @@ import (
 	"sort"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/comnarin/foodstore/internal/domain"
 )
+
+var tracer = otel.Tracer("github.com/comnarin/foodstore/usecase")
+
+// recordUnexpected marks a span as failed only for faults on our side. A
+// customer mistake or a held limited product is an expected outcome.
+func recordUnexpected(span trace.Span, err error) {
+	switch {
+	case err == nil,
+		errors.Is(err, domain.ErrSlotHeld),
+		errors.Is(err, domain.ErrEmptyOrder),
+		errors.Is(err, domain.ErrInvalidQuantity),
+		errors.Is(err, domain.ErrUnknownProduct),
+		errors.Is(err, domain.ErrInvalidMemberCard):
+		return
+	}
+	span.RecordError(err)
+}
 
 // MaxQuantityPerLine bounds a single product line so a typo cannot overflow money math.
 const MaxQuantityPerLine = 1000
@@ -39,6 +60,8 @@ type CalculateOrderDeps struct {
 	Limiter  SlotLimiter
 	Clock    Clock
 	IDs      IDGenerator
+	// Observer is optional; nil means no metrics.
+	Observer Observer
 }
 
 type CalculateOrder struct {
@@ -46,6 +69,9 @@ type CalculateOrder struct {
 }
 
 func NewCalculateOrder(d CalculateOrderDeps) *CalculateOrder {
+	if d.Observer == nil {
+		d.Observer = NopObserver{}
+	}
 	return &CalculateOrder{d: d}
 }
 
@@ -53,6 +79,17 @@ func NewCalculateOrder(d CalculateOrderDeps) *CalculateOrder {
 // ordered, saves the order and returns the quote. Nothing is reserved or
 // saved unless every validation step has passed.
 func (u *CalculateOrder) Execute(ctx context.Context, in CalculateInput) (domain.Quote, error) {
+	ctx, span := tracer.Start(ctx, "CalculateOrder", trace.WithAttributes(
+		attribute.Int("items.count", len(in.Items)),
+		attribute.Bool("member", in.MemberCard != ""),
+	))
+	defer span.End()
+	q, err := u.execute(ctx, in)
+	recordUnexpected(span, err)
+	return q, err
+}
+
+func (u *CalculateOrder) execute(ctx context.Context, in CalculateInput) (domain.Quote, error) {
 	merged, err := mergeItems(in.Items)
 	if err != nil {
 		return domain.Quote{}, err
@@ -80,27 +117,40 @@ func (u *CalculateOrder) Execute(ctx context.Context, in CalculateInput) (domain
 	}
 
 	orderID := u.d.IDs.NewID()
-	holder := in.ClientKey
-	if holder == "" {
-		holder = orderID
+	order := domain.Order{
+		ID:         orderID,
+		MemberCard: card,
+		ClientKey:  in.ClientKey,
+		Carts:      carts,
+		Quote:      quote,
+		CreatedAt:  u.d.Clock.Now(),
 	}
+	holder := order.Holder()
 	claimed, err := u.claimLimited(ctx, carts, holder)
 	if err != nil {
 		return domain.Quote{}, err
 	}
 
-	order := domain.Order{
-		ID:         orderID,
-		MemberCard: card,
-		Carts:      carts,
-		Quote:      quote,
-		CreatedAt:  u.d.Clock.Now(),
+	saveCtx, saveSpan := tracer.Start(ctx, "save_order")
+	err = u.d.Orders.Save(saveCtx, order)
+	if err != nil {
+		recordUnexpected(saveSpan, err)
 	}
-	if err := u.d.Orders.Save(ctx, order); err != nil {
+	saveSpan.End()
+	if err != nil {
 		// The order was not stored, so the customer must be able to try again.
 		u.release(ctx, claimed, holder)
+		var held *domain.SlotHeldError
+		if errors.As(err, &held) {
+			trace.SpanFromContext(ctx).AddEvent("limit.rejected", trace.WithAttributes(attribute.String("source", string(ClaimSourceDatabase))))
+			// Postgres is authoritative: another holder owns the window even
+			// though Redis admitted us (Redis was down or lost its data).
+			u.d.Observer.LimitClaim(held.ProductID, ClaimSourceDatabase, ClaimRejected)
+			return domain.Quote{}, err
+		}
 		return domain.Quote{}, fmt.Errorf("save order: %w", err)
 	}
+	u.d.Observer.OrderCalculated(quote, card != "")
 	return quote, nil
 }
 
@@ -167,12 +217,21 @@ func (u *CalculateOrder) checkMember(ctx context.Context, card string) error {
 	return nil
 }
 
-// claimLimited records every ordered product that has an active limit as
-// ordered by holder, in product-ID order so a multi-product order behaves the
-// same way every time. It returns the products this call newly claimed (a
-// claim holder already had is not included). If any product cannot be claimed,
-// the ones claimed so far are released before the error is returned.
-func (u *CalculateOrder) claimLimited(ctx context.Context, lines []domain.Cart, holder string) ([]domain.ProductID, error) {
+// claimLimited asks the Redis gate to record every ordered product that has an
+// active limit as ordered by holder, in product-ID order so a multi-product
+// order behaves the same way every time. It returns the products this call
+// newly claimed (a claim holder already had is not included). If another
+// holder has a product, the claims made so far are released before the error
+// is returned.
+//
+// Redis is only an admission gate: Postgres decides when the order is saved.
+// So if the limiter fails for any other reason, the request does not fail. It
+// carries on without Redis for the remaining products and lets the Postgres
+// guard in Save make the call.
+func (u *CalculateOrder) claimLimited(ctx context.Context, lines []domain.Cart, holder string) (claimed []domain.ProductID, err error) {
+	ctx, span := tracer.Start(ctx, "claim_limited")
+	defer span.End()
+	defer func() { recordUnexpected(span, err) }()
 	limits, err := u.d.Limits.ActiveLimits(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load limits: %w", err)
@@ -180,10 +239,19 @@ func (u *CalculateOrder) claimLimited(ctx context.Context, lines []domain.Cart, 
 	ordered := append([]domain.Cart(nil), lines...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Product.ID < ordered[j].Product.ID })
 
-	var claimed []domain.ProductID
+	skipRedis := false
+	limitedCount := 0
+	defer func() {
+		span.SetAttributes(attribute.Int("limited.count", limitedCount), attribute.Bool("limiter.fallback", skipRedis))
+	}()
 	for _, l := range ordered {
 		window, limited := limits[l.Product.ID]
 		if !limited {
+			continue
+		}
+		limitedCount++
+		if skipRedis {
+			u.d.Observer.LimiterFallback(l.Product.ID)
 			continue
 		}
 		fresh, err := u.d.Limiter.Claim(ctx, l.Product.ID, holder, window)
@@ -191,13 +259,19 @@ func (u *CalculateOrder) claimLimited(ctx context.Context, lines []domain.Cart, 
 		case err == nil:
 			if fresh {
 				claimed = append(claimed, l.Product.ID)
+				u.d.Observer.LimitClaim(l.Product.ID, ClaimSourceRedis, ClaimClaimed)
+			} else {
+				u.d.Observer.LimitClaim(l.Product.ID, ClaimSourceRedis, ClaimReused)
 			}
 		case errors.Is(err, domain.ErrSlotHeld):
+			u.d.Observer.LimitClaim(l.Product.ID, ClaimSourceRedis, ClaimRejected)
+			span.AddEvent("limit.rejected", trace.WithAttributes(attribute.String("source", string(ClaimSourceRedis))))
 			u.release(ctx, claimed, holder)
 			return nil, &domain.SlotHeldError{ProductID: l.Product.ID, ProductName: l.Product.Name}
 		default:
-			u.release(ctx, claimed, holder)
-			return nil, fmt.Errorf("claim %s: %w", l.Product.ID, err)
+			slog.WarnContext(ctx, "limiter unavailable; the Postgres guard decides", "product", l.Product.ID, "err", err)
+			u.d.Observer.LimiterFallback(l.Product.ID)
+			skipRedis = true
 		}
 	}
 	return claimed, nil
@@ -214,7 +288,9 @@ func (u *CalculateOrder) release(ctx context.Context, products []domain.ProductI
 	defer cancel()
 	for _, id := range products {
 		if err := u.d.Limiter.Release(ctx, id, holder); err != nil {
-			slog.Warn("could not release limited product after a failed order", "product", id, "err", err)
+			slog.WarnContext(ctx, "could not release limited product after a failed order", "product", id, "err", err)
+			continue
 		}
+		u.d.Observer.LimitClaim(id, ClaimSourceRedis, ClaimReleased)
 	}
 }

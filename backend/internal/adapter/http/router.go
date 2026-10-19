@@ -7,6 +7,7 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/recover"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Deps struct {
@@ -19,6 +20,10 @@ type Deps struct {
 	ResetLimits LimitResetter
 	// Ready backs GET /readyz. When nil, the route is not registered.
 	Ready ReadinessChecker
+	// HTTPMetrics records request metrics. Nil turns them off.
+	HTTPMetrics *HTTPMetrics
+	// Tracer starts a server span per request. Nil turns tracing off.
+	Tracer trace.Tracer
 }
 
 func NewApp(d Deps) *fiber.App {
@@ -29,6 +34,15 @@ func NewApp(d Deps) *fiber.App {
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	})
+	// Order matters: tracing and metrics sit outside recover so that a panic
+	// (turned into a 500 by recover) is still counted and traced.
+	routes := &routeLabels{}
+	if d.Tracer != nil {
+		app.Use(tracing(d.Tracer, routes))
+	}
+	if d.HTTPMetrics != nil {
+		app.Use(d.HTTPMetrics.middleware(routes))
+	}
 	app.Use(recover.New())
 
 	h := handlers{images: d.ProductImages, products: d.Products, promotions: d.Promotions, calculator: d.Calculator, reset: d.ResetLimits, ready: d.Ready}
