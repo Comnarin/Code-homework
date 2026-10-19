@@ -26,7 +26,7 @@ docker compose up --build
 | MinIO console | http://localhost:19001 (`MINIO_CONSOLE_HOST_PORT`), login from `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` in your `.env` |
 | MinIO S3 API | `localhost:19000` (`MINIO_API_HOST_PORT`) |
 
-Stop with `Ctrl+C`. Postgres, Redis and MinIO keep their data in named Docker volumes (`postgres-data`, `redis-data`, `minio-data`), so orders, a held Red slot and uploaded pictures survive a stop and restart, even `docker compose down`. For a clean start run `docker compose down -v`. (If you ran an older version of this compose file, its Postgres data lived in an anonymous volume and is not picked up by `postgres-data`; the database is re-created and re-seeded.)
+Stop with `Ctrl+C`. Postgres, Redis and MinIO keep their data in named Docker volumes (`postgres-data`, `redis-data`, `minio-bitnami-data`), so orders, a held Red slot and uploaded pictures survive a stop and restart, even `docker compose down`. For a clean start run `docker compose down -v`. (If you ran an older version of this compose file, its Postgres data lived in an anonymous volume and is not picked up by `postgres-data`; the database is re-created and re-seeded.)
 
 ### Demo member cards
 

@@ -28,8 +28,11 @@ services:
   # Product pictures. Optional for the API: if this is stopped or unreachable,
   # the API serves the built-in "no image" picture and everything else works.
   minio:
-    image: quay.io/minio/minio:RELEASE.2024-11-07T00-52-20Z
-    command: server /data --console-address ":9001"
+    # MinIO no longer publishes images on quay.io or Docker Hub. This is the
+    # Bitnami legacy build of the same MinIO release (2024-11-07); it still
+    # serves the web console. It runs as a non-root user, so it needs its own
+    # volume (the older root-owned `minio-data` volume cannot be reused).
+    image: docker.io/bitnamilegacy/minio:2024.11.7-debian-12-r2
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Copy .env.example to .env first}
@@ -37,7 +40,7 @@ services:
       - "${MINIO_API_HOST_PORT:-19000}:9000"
       - "${MINIO_CONSOLE_HOST_PORT:-19001}:9001"
     volumes:
-      - minio-data:/data
+      - minio-bitnami-data:/bitnami/minio/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
       interval: 5s
@@ -89,4 +92,4 @@ services:
 volumes:
   postgres-data:
   redis-data:
-  minio-data:
+  minio-bitnami-data:

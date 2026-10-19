@@ -36,10 +36,27 @@ jobs:
           --health-interval 3s
           --health-timeout 3s
           --health-retries 20
+      # Same MinIO release the compose file uses (no longer on quay.io / Docker Hub).
+      minio:
+        image: docker.io/bitnamilegacy/minio:2024.11.7-debian-12-r2
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: ci-minio-password
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "curl -f http://127.0.0.1:9000/minio/health/live"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
     env:
       # The Postgres tests create and drop their own foodstore_test database on this server.
       DATABASE_URL: postgres://postgres:ci-password@localhost:5432/foodstore?sslmode=disable
       REDIS_ADDR: localhost:6379
+      # The MinIO adapter tests skip when these are unset.
+      MINIO_TEST_ENDPOINT: localhost:9000
+      MINIO_TEST_ACCESS_KEY: minioadmin
+      MINIO_TEST_SECRET_KEY: ci-minio-password
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
