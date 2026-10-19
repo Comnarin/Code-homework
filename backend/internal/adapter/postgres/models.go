@@ -56,6 +56,7 @@ func (productLimitModel) TableName() string { return "product_limits" }
 type orderModel struct {
 	ID                   string               `gorm:"column:id;primaryKey"`
 	MemberCard           *string              `gorm:"column:member_card"`
+	ClientKey            *string              `gorm:"column:client_key"`
 	TotalBeforeSatang    int64                `gorm:"column:total_before_satang"`
 	MemberDiscountSatang int64                `gorm:"column:member_discount_satang"`
 	FinalTotalSatang     int64                `gorm:"column:final_total_satang"`
@@ -70,6 +71,8 @@ type orderItemModel struct {
 	OrderID   string `gorm:"column:order_id;primaryKey"`
 	ProductID string `gorm:"column:product_id;primaryKey"`
 	Quantity  int    `gorm:"column:quantity"`
+	// StartedLimitWindow marks the item that opened a limited product's window.
+	StartedLimitWindow bool `gorm:"column:started_limit_window"`
 }
 
 func (orderItemModel) TableName() string { return "order_items" }
