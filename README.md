@@ -58,11 +58,6 @@ All settings come from environment variables. Each place that reads them has a c
 | `backend/.env` (from `backend/.env.example`)   | the API when run outside Docker (`go run ./cmd/server`) | `DATABASE_URL` (required), `REDIS_ADDR`, `REDIS_DB` (0-15, default 0), `PORT`, `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` / `MINIO_BUCKET` / `MINIO_USE_SSL` (optional; leave `MINIO_ENDPOINT` empty for no pictures), `ENABLE_TEST_TOOLS`           |
 | `frontend/.env` (from `frontend/.env.example`) | `npm run dev` / `npm run build`                       | `API_URL`, `ENABLE_TEST_TOOLS`                                                                                                                                                                                                                                                         |
 
-Real environment variables always win over a `.env` file, and a missing `.env` is fine when the
-variables are set another way (CI, production). Docker images never contain `.env` files.
-`ENABLE_TEST_TOOLS` defaults to `false` in every `.env.example`. Set it to `true` to expose a test-only
-"reset the Red set limit" endpoint and button for a demo; keep it `false` anywhere real customers can reach.
-
 ## Product pictures (MinIO)
 
 Each product card shows a picture. Pictures live in MinIO (S3-compatible storage); the database only
@@ -201,14 +196,6 @@ Browser -> frontend/src/features/calculator   (cart UI, API client)
         -> backend/internal/domain            (pricing + discount rules)
         -> adapter/postgres | adapter/redis | adapter/minio   (storage)
 ```
-
-## Red-limit consistency model
-
-- **Postgres is authoritative.** The order save runs the Red check inside its own transaction: it locks the active `product_limits` row, looks up who opened the current window (`order_items.started_limit_window`, holder = `orders.client_key` or the order id) and rejects a different holder with 409. A repeat order by the same holder is allowed and never extends the window.
-- **Redis is a fast admission gate** in front of it. It answers most conflicts without a database transaction. If the gate admits a request that Postgres then rejects (Redis lost its data, or was down when the winner ordered), the Redis claim is released.
-- **A circuit breaker** (200 ms command timeout, 5 s cooldown) stops requests from waiting on a dead Redis. While Redis is unavailable the request skips it and Postgres alone decides, so there is no outage window in which two buyers can both win.
-- **`/readyz`** reports `degraded` (HTTP 200) when only Redis is down, so the API stays in rotation.
-- Trade-offs: the app clock and Redis TTL can differ slightly, so after an outage Redis may block the same holder a little longer than Postgres would; a leftover Redis key with no matching order over-blocks until its TTL expires (it never double-sells); under the database path concurrent Red orders are serialized by the row lock; `OrderRepository.Save` now enforces limits (documented on the port).
 
 ## Pricing rules (from the task)
 
