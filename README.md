@@ -3,7 +3,7 @@
 A price calculator for a food store with 7 menu items. A **Go (Fiber) API** prices orders with
 pair and member discounts and enforces the "one Red order per hour" limit. A
 **Next.js UI** lets a customer pick quantities, enter a member card and see the breakdown.
-Postgres (via GORM) holds products, members, discount rules and orders; Redis holds the Red-set claim;
+Postgres (via GORM) holds products, members, discount rules and orders and is the authority on the Red-set limit; Redis is a fast gate in front of it;
 MinIO holds the product pictures.
 
 ## Prerequisites
@@ -45,7 +45,7 @@ Cards are case-insensitive and surrounding spaces are ignored.
 
 If saving the order fails, the Red claim made by that request is released, so the customer can retry.
 
-To reset the window, set `ENABLE_TEST_TOOLS=true` in `.env` (default is `false`) and use the "Reset Red set limit" button, or run `docker compose exec redis redis-cli FLUSHALL`.
+To reset the window, set `ENABLE_TEST_TOOLS=true` in `.env` (default is `false`) and use the "Reset Red set limit" button. Flushing Redis alone no longer resets the window, because Postgres is authoritative.
 
 ## Configuration (`.env`)
 
@@ -55,7 +55,7 @@ All settings come from environment variables. Each place that reads them has a c
 | File | Used by | Key settings |
 |---|---|---|
 | `.env` (from `.env.example`) | `docker compose` | `POSTGRES_PASSWORD` (required), `POSTGRES_USER`, `POSTGRES_DB`, `POSTGRES_HOST_PORT`, `API_HOST_PORT`, `WEB_HOST_PORT`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` (required), `MINIO_BUCKET`, `MINIO_API_HOST_PORT`, `MINIO_CONSOLE_HOST_PORT`, `ENABLE_TEST_TOOLS` |
-| `backend/.env` (from `backend/.env.example`) | the API when run outside Docker (`go run ./cmd/server`) | `DATABASE_URL` (required), `REDIS_ADDR`, `PORT`, `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` / `MINIO_BUCKET` / `MINIO_USE_SSL` (optional; leave `MINIO_ENDPOINT` empty for no pictures), `ENABLE_TEST_TOOLS` |
+| `backend/.env` (from `backend/.env.example`) | the API when run outside Docker (`go run ./cmd/server`) | `DATABASE_URL` (required), `REDIS_ADDR`, `REDIS_DB` (0-15, default 0), `PORT`, `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` / `MINIO_BUCKET` / `MINIO_USE_SSL` (optional; leave `MINIO_ENDPOINT` empty for no pictures), `ENABLE_TEST_TOOLS` |
 | `frontend/.env` (from `frontend/.env.example`) | `npm run dev` / `npm run build` | `API_URL`, `ENABLE_TEST_TOOLS` |
 
 Real environment variables always win over a `.env` file, and a missing `.env` is fine when the
@@ -94,13 +94,121 @@ The browser never talks to MinIO: it asks the API (`GET /api/products/{id}/image
 inside Docker. The default picture is compiled into the API (`internal/adapter/assets/no-image.svg`) and
 copied to `frontend/public/no-image.svg`; if you change one, change both.
 
+## Architecture at a glance
+
+### 1. The big picture (what runs in Docker)
+
+```mermaid
+flowchart LR
+    U([Customer's browser]) -->|":3000"| W["<b>web</b><br/>Next.js UI"]
+    W -->|"/api/* proxied"| A["<b>api</b><br/>Go + Fiber"]
+    A -->|"products, members, rules,<br/>orders + Red-limit check"| P[("<b>Postgres</b><br/>source of truth")]
+    A -.->|"fast Red-slot gate<br/>(optional)"| R[("<b>Redis</b><br/>speed only")]
+    A -.->|"product pictures<br/>(optional)"| M[("<b>MinIO</b><br/>image storage")]
+```
+
+| Piece | Job | If it is down |
+|---|---|---|
+| **web** | Shows the menu, cart and price breakdown | Nothing works (it is the UI) |
+| **api** | Prices orders and enforces the rules | UI cannot calculate |
+| **Postgres** | Stores everything and makes the final Red-limit decision | `/readyz` returns 503, API cannot price |
+| **Redis** | Fast first check for the Red slot | **Nothing breaks**: Postgres decides alone, `/readyz` says `degraded` |
+| **MinIO** | Stores product pictures | **Nothing breaks**: the API serves a built-in "no image" picture |
+
+The browser only ever talks to **web** (and through it **api**). It never talks to the databases or MinIO.
+
+### 2. Inside the API (Clean Architecture)
+
+```mermaid
+flowchart TB
+    subgraph adapter["adapter: talks to the outside world"]
+        H["http (Fiber)<br/>routes, JSON, error codes"]
+        PG["postgres (GORM)"]
+        RD["redis (Lua claim / release<br/>+ circuit breaker)"]
+        MN["minio + assets"]
+    end
+    subgraph usecase["usecase: one class per user action"]
+        UC["CalculateOrder<br/>Products · Promotions<br/>GetProductImage · ResetLimits"]
+        PORTS{{"ports.go<br/>interfaces the use cases need"}}
+    end
+    subgraph domain["domain: pure business rules, no frameworks"]
+        D["Money · Product · Order<br/>pricing.go · rules.go"]
+    end
+    H --> UC
+    UC --> D
+    UC --> PORTS
+    PG -. implements .-> PORTS
+    RD -. implements .-> PORTS
+    MN -. implements .-> PORTS
+```
+
+**Rule of thumb:** arrows point inward. `adapter -> usecase -> domain`. The domain knows nothing about HTTP,
+Postgres or Redis, so the pricing rules can be tested with plain Go tests, and a database can be swapped by
+writing a new adapter.
+
+### 3. What happens when you press "Calculate"
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant API as API (CalculateOrder)
+    participant RD as Redis (fast gate)
+    participant PG as Postgres (authority)
+    B->>API: POST /api/calculate (items, member card, X-Client-Key)
+    API->>API: 1. validate quantities, merge repeated products
+    API->>PG: 2. load products, check member card, load active rules
+    API->>API: 3. price it (pair discount 5%, then member discount 10%)
+    opt cart has Red
+        API->>RD: 4. claim the Red slot for 1 hour
+        alt held by someone else
+            API-->>B: 409 LIMITED_PRODUCT_UNAVAILABLE
+        else Redis down or breaker open
+            Note over API,RD: skip Redis, Postgres decides in step 5
+        end
+    end
+    API->>PG: 5. save the order (same transaction re-checks the Red limit)
+    alt Postgres says another holder owns Red
+        API->>RD: release our Redis claim
+        API-->>B: 409 LIMITED_PRODUCT_UNAVAILABLE
+    else saved
+        API-->>B: 200 quote (amounts in satang)
+    end
+```
+
+### 4. When Redis fails
+
+```mermaid
+flowchart LR
+    R1["Redis answers"] --> OK["fast accept / reject"] --> S["Postgres still re-checks on save"]
+    R2["Redis times out (200 ms)<br/>or refuses"] --> BR["breaker opens for 5 s:<br/>later requests skip Redis instantly"] --> S
+    S --> W["one Red winner per hour,<br/>even with Redis down"]
+```
+
+### 5. Where the code lives
+
+```
+Browser -> frontend/src/features/calculator   (cart UI, API client)
+        -> backend/internal/adapter/http      (route + JSON)
+        -> backend/internal/usecase           (CalculateOrder: the workflow)
+        -> backend/internal/domain            (pricing + discount rules)
+        -> adapter/postgres | adapter/redis | adapter/minio   (storage)
+```
+
+## Red-limit consistency model
+
+- **Postgres is authoritative.** The order save runs the Red check inside its own transaction: it locks the active `product_limits` row, looks up who opened the current window (`order_items.started_limit_window`, holder = `orders.client_key` or the order id) and rejects a different holder with 409. A repeat order by the same holder is allowed and never extends the window.
+- **Redis is a fast admission gate** in front of it. It answers most conflicts without a database transaction. If the gate admits a request that Postgres then rejects (Redis lost its data, or was down when the winner ordered), the Redis claim is released.
+- **A circuit breaker** (200 ms command timeout, 5 s cooldown) stops requests from waiting on a dead Redis. While Redis is unavailable the request skips it and Postgres alone decides, so there is no outage window in which two buyers can both win.
+- **`/readyz`** reports `degraded` (HTTP 200) when only Redis is down, so the API stays in rotation.
+- Trade-offs: the app clock and Redis TTL can differ slightly, so after an outage Redis may block the same holder a little longer than Postgres would; a leftover Redis key with no matching order over-blocks until its TTL expires (it never double-sells); under the database path concurrent Red orders are serialized by the row lock; `OrderRepository.Save` now enforces limits (documented on the port).
+
 ## Pricing rules (from the task)
 
 | Rule | Behavior |
 |---|---|
 | Pair discount | Each pair of the **same** colour among Orange, Pink or Green gets 5% off that pair. Pink x4 = two discounted pairs; Green x3 = one discounted pair + one full-price set. |
 | Member discount | A valid member card gives 10% off the total **after** pair discounts. |
-| Red set | If a Red set was ordered in the last hour, further Red orders are rejected for everyone until the hour is over. |
+| Red set | If a Red set was ordered in the last hour, further Red orders are rejected for everyone else until the hour is over. |
 
 Money is handled as integer satang (1/100 THB) to avoid float errors; discounts round half-up.
 
@@ -111,7 +219,7 @@ All errors look like `{"error":{"code":"...","message":"..."}}`.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/healthz` | liveness only: the process is up; it never touches Postgres or Redis |
-| GET | `/readyz` | readiness: pings Postgres and Redis, 200 `{"status":"ok"}` or 503 `{"status":"unavailable"}` (no details); used by the API's Docker healthcheck. MinIO is not checked because pictures fall back to the default |
+| GET | `/readyz` | readiness: Postgres must answer. 200 `{"status":"ok"}`; 200 `{"status":"degraded"}` when only Redis is down (the Postgres guard still enforces the Red rule); 503 `{"status":"unavailable"}` when Postgres is down (no details). Used by the API's Docker healthcheck. MinIO is not checked because pictures fall back to the default |
 | GET | `/api/products` | the menu: `[{ "id", "name", "priceSatang", "imageUrl" }]` |
 | GET | `/api/products/{id}/image` | the product picture, or the built-in "no image" picture when there is none or it cannot be loaded (always 200 for a known product) |
 | GET | `/api/promotions` | the active rules (`[{ code, type, percent, bundleSize?, productIds? }]`); the UI reads badges and percents from here, so rule changes need no frontend change |
@@ -194,8 +302,9 @@ backend/                 Go, Clean Architecture
   cmd/server/            composition root: wires everything together
   internal/domain/       entities, Money, pricing rules (stdlib only)
   internal/usecase/      CalculateOrder, Products, Promotions, GetProductImage, ResetLimits + the ports they need (ports.go)
-  internal/adapter/      http (Fiber) · postgres (GORM) · redis (Lua claim / compare-and-delete release) · minio (pictures) · assets (built-in no-image picture)
+  internal/adapter/      http (Fiber) · postgres (GORM; the order save enforces the Red limit) · redis (Lua claim / release with a circuit breaker) · minio (pictures) · assets (built-in no-image picture)
   internal/platform/     config, database connection and migrations
+  internal/e2e/          end-to-end tests of the Red rule with Redis up and down
   migrations/            SQL schema and seed data
 frontend/                Next.js 16 App Router, TypeScript
   src/app/               page (streamed menu), error boundary
