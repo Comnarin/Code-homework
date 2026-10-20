@@ -26,6 +26,7 @@ const quote: Quote = {
     },
   ],
   memberDiscountSatang: 2280,
+  memberBaseSatang: 22800,
   finalTotalSatang: 20520,
 };
 
@@ -87,6 +88,7 @@ describe("ResultSummary", () => {
           totalBeforeSatang: 6000,
           itemDiscounts: [],
           memberDiscountSatang: 0,
+          memberBaseSatang: 22800,
           finalTotalSatang: 6000,
         }}
         onRecalculate={vi.fn()}
@@ -118,6 +120,20 @@ describe("ResultSummary", () => {
     expect(within(items).getByText(/1 pair · 5% off/)).toBeInTheDocument();
     // 240.00 - 12.00 = 228.00 is what the member percent applies to.
     expect(screen.getByText(/10% of .*228\.00/)).toBeInTheDocument();
+  });
+
+  it("uses the base the backend reports when the member rule runs first", () => {
+    const promotions = buildPromotionView([
+      { code: "MEMBER_10", type: "MEMBER_PERCENT", percent: 10 },
+    ]);
+    render(
+      <ResultSummary
+        quote={{ ...quote, memberBaseSatang: 24000, memberDiscountSatang: 2400 }}
+        promotions={promotions}
+        onRecalculate={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/10% of .*240\.00/)).toBeInTheDocument();
   });
 
   it("lists every product that was ordered with quantity, unit price and line total", () => {

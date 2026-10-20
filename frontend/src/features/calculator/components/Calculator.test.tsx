@@ -34,6 +34,7 @@ const okResult: CalculateResult = {
     totalBeforeSatang: 16000,
     itemDiscounts: [],
     memberDiscountSatang: 1600,
+    memberBaseSatang: 22800,
     finalTotalSatang: 14400,
   },
 };

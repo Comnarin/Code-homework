@@ -13,11 +13,6 @@ type Props = {
 
 export function ResultSummary({ quote, promotions, onRecalculate }: Props) {
   const saved = quote.totalBeforeSatang - quote.finalTotalSatang;
-  const itemDiscountTotal = quote.itemDiscounts.reduce(
-    (sum, d) => sum + d.amountSatang,
-    0,
-  );
-  const afterPairs = quote.totalBeforeSatang - itemDiscountTotal;
   const memberPercent = promotions?.memberPercent ?? null;
 
   // The form this replaces is gone, so move focus to the new content for
@@ -138,7 +133,7 @@ export function ResultSummary({ quote, promotions, onRecalculate }: Props) {
             <p>Discount from member card</p>
             {memberPercent !== null && quote.memberDiscountSatang > 0 && (
               <p className="text-sm text-ink-soft tabular-nums">
-                {formatPercent(memberPercent)} of {formatTHB(afterPairs)}
+                {formatPercent(memberPercent)} of {formatTHB(quote.memberBaseSatang)}
               </p>
             )}
           </div>
