@@ -16,7 +16,8 @@ type Discount struct {
 	Scope     Scope
 	ProductID ProductID // empty for ScopeMember
 	Name      string
-	Bundles   int // how many groups (for example pairs) were discounted
+	Bundles   int   // how many groups (for example pairs) were discounted
+	Base      Money // the amount the rule's percent was applied to
 	Amount    Money
 }
 
@@ -45,6 +46,18 @@ func (q Quote) ItemDiscounts() []Discount {
 		}
 	}
 	return out
+}
+
+// MemberDiscountBase is the amount the member percent was applied to. It depends
+// on rule priority: after the pair rule it is the total minus pair discounts,
+// before it, it is the full total.
+func (q Quote) MemberDiscountBase() Money {
+	for _, d := range q.Discounts {
+		if d.Scope == ScopeMember {
+			return d.Base
+		}
+	}
+	return 0
 }
 
 func (q Quote) MemberDiscount() Money {

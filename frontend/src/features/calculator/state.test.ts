@@ -14,6 +14,7 @@ const quote: Quote = {
   totalBeforeSatang: 100,
   itemDiscounts: [],
   memberDiscountSatang: 0,
+  memberBaseSatang: 22800,
   finalTotalSatang: 100,
 };
 const withQty = (

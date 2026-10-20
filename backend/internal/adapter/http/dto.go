@@ -48,6 +48,7 @@ type calculateResponse struct {
 	TotalBeforeSatang    int64             `json:"totalBeforeSatang"`
 	ItemDiscounts        []itemDiscountDTO `json:"itemDiscounts"`
 	MemberDiscountSatang int64             `json:"memberDiscountSatang"`
+	MemberBaseSatang     int64             `json:"memberBaseSatang"`
 	FinalTotalSatang     int64             `json:"finalTotalSatang"`
 }
 
@@ -100,6 +101,7 @@ func toCalculateResponse(q domain.Quote) calculateResponse {
 		TotalBeforeSatang:    int64(q.TotalBefore),
 		ItemDiscounts:        items,
 		MemberDiscountSatang: int64(q.MemberDiscount()),
+		MemberBaseSatang:     int64(q.MemberDiscountBase()),
 		FinalTotalSatang:     int64(q.FinalTotal),
 	}
 }

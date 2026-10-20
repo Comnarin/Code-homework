@@ -38,6 +38,7 @@ const quoteSchema = z.object({
     }),
   ),
   memberDiscountSatang: z.number().int(),
+  memberBaseSatang: z.number().int(),
   finalTotalSatang: z.number().int(),
 });
 

@@ -55,6 +55,7 @@ func (r BundlePercent) Apply(lines []Cart, _ Money, _ bool) []Discount {
 			ProductID: l.Product.ID,
 			Name:      l.Product.Name,
 			Bundles:   bundles,
+			Base:      base,
 			Amount:    base.ApplyPercent(r.percent),
 		})
 	}
@@ -89,5 +90,5 @@ func (r MemberPercent) Apply(_ []Cart, subtotal Money, isMember bool) []Discount
 	if amount == 0 {
 		return nil
 	}
-	return []Discount{{RuleCode: r.code, Scope: ScopeMember, Amount: amount}}
+	return []Discount{{RuleCode: r.code, Scope: ScopeMember, Base: subtotal, Amount: amount}}
 }

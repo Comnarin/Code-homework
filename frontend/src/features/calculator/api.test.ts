@@ -33,6 +33,7 @@ const validQuote = {
     },
   ],
   memberDiscountSatang: 2280,
+  memberBaseSatang: 22800,
   finalTotalSatang: 20520,
 };
 

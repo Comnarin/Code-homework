@@ -235,6 +235,7 @@ Response (amounts in satang):
   "totalBeforeSatang": 24000,
   "itemDiscounts": [{ "ruleCode": "PAIR_5", "productId": "orange", "name": "Orange set", "bundles": 1, "amountSatang": 1200 }],
   "memberDiscountSatang": 2280,
+  "memberBaseSatang": 22800,
   "finalTotalSatang": 20520
 }
 ```

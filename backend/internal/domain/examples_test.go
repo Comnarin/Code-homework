@@ -43,3 +43,33 @@ func TestCalculate_Examples(t *testing.T) {
 		})
 	}
 }
+
+// The member base follows rule priority: whichever order the rules run in, the
+// quote reports the amount the member percent was really applied to.
+func TestQuote_MemberDiscountBaseFollowsPriority(t *testing.T) {
+	cart := []Cart{{orange, 2}}
+	for _, tt := range []struct {
+		name           string
+		pairPriority   int
+		memberPriority int
+		wantBase       Money
+		wantMember     Money
+		wantFinal      Money
+	}{
+		{"member after pair", 10, 100, 22800, 2280, 20520},
+		{"member before pair", 100, 10, 24000, 2400, 24000 - 2400 - 1200},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pair, _ := NewBundlePercent("PAIR_5", tt.pairPriority, []ProductID{"orange"}, 2, 5)
+			member, _ := NewMemberPercent("MEMBER_10", tt.memberPriority, 10)
+			q, err := Calculate(cart, true, []Rule{pair, member})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if q.MemberDiscountBase() != tt.wantBase || q.MemberDiscount() != tt.wantMember || q.FinalTotal != tt.wantFinal {
+				t.Fatalf("base=%d member=%d final=%d; want %d/%d/%d",
+					q.MemberDiscountBase(), q.MemberDiscount(), q.FinalTotal, tt.wantBase, tt.wantMember, tt.wantFinal)
+			}
+		})
+	}
+}
